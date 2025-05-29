@@ -215,8 +215,8 @@ const updateDescendantFileSelectionsInTree = (
 export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const [fileTree, setFileTree] = useState<FileSystemNode[]>([]);
   const [_globalSettings, _setGlobalSettings] = useState<GlobalExportSettings>({
-    defaultExcludeFolders: [], // Not used directly by current import logic, but kept for potential future use
-    defaultExcludeFiles: [], // Not used directly by current import logic
+    defaultExcludeFolders: [], 
+    defaultExcludeFiles: [], 
   });
 
   const [matches, setMatches] = useState<Match[]>(() => loadFromLocalStorage(LS_KEYS.MATCHES, DEFAULT_MATCHES));
@@ -234,7 +234,6 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const [macroUndoStack, setMacroUndoStack] = useState<AppStateSnapshot[]>([]);
   const [macroRedoStack, setMacroRedoStack] = useState<AppStateSnapshot[]>([]);
 
-  // Effects to save to localStorage when state changes
   useEffect(() => { saveToLocalStorage(LS_KEYS.MATCHES, matches); }, [matches]);
   useEffect(() => { saveToLocalStorage(LS_KEYS.RULES, rules); }, [rules]);
   useEffect(() => { saveToLocalStorage(LS_KEYS.RULESETS, rulesets); }, [rulesets]);
@@ -261,9 +260,19 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     }
   }, []);
 
-  // --- FileTree Snapshot and Undo/Redo ---
   const saveFileTreeSnapshot = useCallback(() => {
-    const snapshot: AppStateSnapshot = { fileTree: JSON.parse(JSON.stringify(fileTree)) };
+    // Filter out _fileHandle before stringifying for snapshot, as it's not serializable
+    const cleanTreeForSnapshot = (nodes: FileSystemNode[]): FileSystemNode[] => {
+        return nodes.map(node => {
+            const { _fileHandle, ...restOfNode } = node as FileNode; // Destructure to remove _fileHandle
+            const cleanNode = { ...restOfNode } as FileSystemNode; // Create a new object without _fileHandle
+            if (cleanNode.type === 'directory' && cleanNode.children) {
+                (cleanNode as DirectoryNode).children = cleanTreeForSnapshot(cleanNode.children);
+            }
+            return cleanNode;
+        });
+    };
+    const snapshot: AppStateSnapshot = { fileTree: cleanTreeForSnapshot(fileTree) }; // Uses the cleaned tree
     setFileTreeUndoStack(prev => [...prev, snapshot].slice(-20));
     setFileTreeRedoStack([]);
   }, [fileTree]);
@@ -271,24 +280,23 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const undoFileTreeAction = () => {
     if (fileTreeUndoStack.length > 0) {
       const lastState = fileTreeUndoStack[fileTreeUndoStack.length - 1];
-      const currentSnapshot: AppStateSnapshot = { fileTree: JSON.parse(JSON.stringify(fileTree)) };
-      setFileTreeRedoStack(prev => [currentSnapshot, ...prev].slice(-20));
+      saveFileTreeSnapshot(); // Save current state to redo before reverting
       setFileTreeUndoStack(prev => prev.slice(0, -1));
-      setFileTree(lastState.fileTree);
+      setFileTree(lastState.fileTree); // This tree is already cleaned (no _fileHandle)
     }
   };
 
   const redoFileTreeAction = () => {
     if (fileTreeRedoStack.length > 0) {
       const nextState = fileTreeRedoStack[0];
-      const currentSnapshot: AppStateSnapshot = { fileTree: JSON.parse(JSON.stringify(fileTree)) };
-      setFileTreeUndoStack(prev => [...prev, currentSnapshot].slice(-20));
+      // Current state is already saved to undo by the action that put `nextState` in redo stack
+      // or by the preceding `undoFileTreeAction` if `saveFileTreeSnapshot()` was called there.
+      // The logic of `saveFileTreeSnapshot` handles adding current state to undo stack.
       setFileTreeRedoStack(prev => prev.slice(1));
-      setFileTree(nextState.fileTree);
+      setFileTree(nextState.fileTree); // This tree is already cleaned
     }
   };
 
-  // --- Match Helpers ---
   const checkNodeAgainstMatchConditions = (node: FileSystemNode, match: Match): boolean => {
     if (node.type !== (match.targetType === MatchTargetType.FOLDER ? 'directory' : 'file')) return false;
 
@@ -335,14 +343,25 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     });
   };
 
-  // --- Import Directory & Rule Application ---
   const applyImportRules = (nodes: FileSystemNode[], rulesetIdToApply: UID | null): FileSystemNode[] => {
     const ruleset = rulesetIdToApply ? rulesets.find(rs => rs.id === rulesetIdToApply && rs.type === RuleType.IMPORT) : null;
-    if (!ruleset || ruleset.rules.length === 0) return nodes;
+    if (!ruleset || ruleset.rules.length === 0) {
+        // If no ruleset or no rules, all nodes are included by default (maintaining _fileHandle)
+        const includeAll = (originalNodes: FileSystemNode[]): FileSystemNode[] => {
+            return originalNodes.map(node => {
+                const copiedNode = { ...node }; // Shallow copy to preserve _fileHandle
+                if (copiedNode.type === 'directory' && copiedNode.children) {
+                    (copiedNode as DirectoryNode).children = includeAll(copiedNode.children);
+                }
+                return copiedNode;
+            });
+        };
+        return includeAll(nodes);
+    }
 
     const sortedRuleInstances = [...ruleset.rules]
         .filter(ri => ri.enabled)
-        .sort((a, b) => a.priority - b.priority); // Lower number = higher priority, processed first
+        .sort((a, b) => a.priority - b.priority);
 
     const decisionMap = new Map<UID, { included: boolean; reason: string }>();
 
@@ -372,42 +391,40 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
                         if (node.type === 'directory') isIncluded = false;
                         break;
                 }
-                // Decision made by the highest-priority matching rule.
                 break;
             }
         }
         
-        // If no specific rule matched this node, its inclusion status is purely inherited.
-        // If a rule did match, 'isIncluded' and 'reason' are now set by that rule.
         decisionMap.set(node.id, { included: isIncluded, reason });
 
         if (node.type === 'directory' && node.children) {
             node.children.forEach(child => {
-                // Children inherit the decision just made for THIS parent
                 determineNodeDecision(child, { included: isIncluded, reason: `父文件夹 (${node.name}) ${isIncluded ? '已导入' : '已排除基于规则: ' + reason}` });
             });
         }
     }
 
-    // Initialize root nodes: they are by default considered for import, rules will then refine this.
     nodes.forEach(node => determineNodeDecision(node, { included: true, reason: "默认包含 (待规则过滤)" }));
 
     const filterTree = (nodesToFilter: FileSystemNode[]): FileSystemNode[] => {
       return nodesToFilter
-        .map(node => {
+        .map(node => { // node is from the original 'nodes' array (rawNodes)
+          const decision = decisionMap.get(node.id);
+          const isNodeIncluded = decision ? decision.included : false; // Default to false if no decision (should not happen)
+
           if (node.type === 'directory' && node.children) {
             const filteredChildren = filterTree(node.children);
-            if (decisionMap.get(node.id)?.included || filteredChildren.length > 0) {
-              return { ...node, children: filteredChildren };
+            if (isNodeIncluded || filteredChildren.length > 0) {
+              return { ...node, children: filteredChildren }; // Shallow copy, preserve _fileHandle
             }
             return null;
           }
-          return decisionMap.get(node.id)?.included ? node : null;
+          return isNodeIncluded ? { ...node } : null; // Shallow copy, preserve _fileHandle
         })
         .filter(node => node !== null) as FileSystemNode[];
     };
-
-    return filterTree(JSON.parse(JSON.stringify(nodes)));
+    
+    return filterTree(nodes); // Pass original nodes (rawNodes)
   };
 
   const loadContentForRemainingFiles = async (nodes: FileSystemNode[]): Promise<FileSystemNode[]> => {
@@ -415,7 +432,6 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
         let updatedNode = { ...node };
         if (updatedNode.type === 'file') {
             const fileNode = updatedNode as FileNode;
-            // Load content only if _fileHandle exists and content hasn't been set (e.g. for binary placeholders)
             if (fileNode._fileHandle && typeof fileNode.content === 'undefined') {
                 try {
                     const file = await (fileNode._fileHandle as FileSystemFileHandle).getFile();
@@ -428,7 +444,9 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
                     fileNode.totalLines = 0;
                 }
             }
-            delete fileNode._fileHandle; // Clean up handle after loading or if not needed
+            // Always delete _fileHandle after attempting to load or if not needed for this stage
+            // to prevent it from being saved in snapshots if not handled there.
+            delete fileNode._fileHandle; 
         } else if (updatedNode.type === 'directory' && updatedNode.children) {
             (updatedNode as DirectoryNode).children = await loadContentForRemainingFiles(updatedNode.children);
         }
@@ -468,13 +486,11 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
                     limitType: LineLimitRuleTypeOption.NO_LINES, params: {}
                 };
             } else {
-                // Store handle for deferred loading if it's a real directory import
-                // For mock/example, content is loaded directly below if handle is mock.
-                if (handles && handles.length > 0) { // Check if it's a real import
+                if (handles && handles.length > 0) { 
                      tempFileHandleForLaterLoading = fileHandle;
-                } else { // It's a mock/example import
+                } else { 
                     try {
-                        const file = await fileHandle.getFile(); // This is fine for mock
+                        const file = await fileHandle.getFile(); 
                         nodeContent = await file.text();
                         nodeTotalLines = nodeContent.split('\n').length;
                     } catch (e) {
@@ -511,7 +527,6 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
           if (rootNode) rawNodes.push(rootNode);
         }
       } else {
-        // Simplified Mock Structure: content is loaded synchronously by processHandle for mocks now
         const mockIndexTsHandle = { name: "index.ts", kind: 'file', getFile: async () => new File(["console.log('hello from mock index.ts');\n// another line"], "index.ts", {type: "text/typescript"}) } as unknown as FileSystemFileHandle;
         const mockReadmeMdHandle = { name: "README.md", kind: 'file', getFile: async () => new File(["# Mock Project Readme\nThis is a mock project."], "README.md", {type: "text/markdown"}) } as unknown as FileSystemFileHandle;
         const mockSrcDirHandle = { name: "src", kind: 'directory', values: async function*() { yield mockIndexTsHandle; } } as unknown as FileSystemDirectoryHandle;
@@ -526,7 +541,6 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     }
 
     const ruleAppliedTree = applyImportRules(rawNodes, selectedImportRulesetId);
-    // Load content for files that survived the import rules and aren't binary placeholders
     const treeWithContentLoaded = await loadContentForRemainingFiles(ruleAppliedTree);
     setFileTree(treeWithContentLoaded);
   };
@@ -566,7 +580,6 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   };
 
 
-  // --- Matches CRUD ---
   const addMatch = (matchData: Omit<Match, 'id' | 'isDefault'>): Match => {
     const newMatch = { ...matchData, id: generateId(), isDefault: false } as Match;
     setMatches(prev => [...prev, newMatch]);
@@ -583,7 +596,6 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   };
   const getMatchById = (id: UID) => matches.find(m => m.id === id);
 
-  // --- Rules CRUD ---
   const addRule = (ruleData: Omit<Rule, 'id' | 'isDefault'>): Rule => {
     const newRule = { ...ruleData, id: generateId(), isDefault: false } as Rule;
     setRules(prev => [...prev, newRule]);
@@ -602,7 +614,6 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   };
   const getRuleById = (id: UID) => rules.find(r => r.id === id);
 
-  // --- Rulesets CRUD ---
   const addRuleset = (rulesetData: Omit<Ruleset, 'id' | 'rules' | 'isDefault'>): Ruleset => {
     const newRuleset = { ...rulesetData, id: generateId(), rules: [], isDefault: false };
     setRulesets(prev => [...prev, newRuleset]);
@@ -698,7 +709,6 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     }));
   };
 
-  // --- Operations CRUD ---
   const addOperation = (opData: Omit<Operation, 'id'|'isDefault'>): Operation => {
     const newOp = { ...opData, id: generateId(), isDefault: false } as Operation;
     setOperations(prev => [...prev, newOp]);
@@ -717,7 +727,6 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   };
   const getOperationById = (id: UID) => operations.find(op => op.id === id);
 
-  // --- Macros CRUD ---
   const addMacro = (macroData: Omit<Macro, 'id' | 'operations' | 'isDefault'>): Macro => {
     const newMacro = { ...macroData, id: generateId(), operations: [], isDefault: false };
     setMacros(prev => [...prev, newMacro]);
@@ -810,7 +819,6 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     }));
   };
 
-  // --- Macro Execution ---
   const getSelectedFileIds = (tree: FileSystemNode[]): Set<UID> => {
     const selectedIds = new Set<UID>();
     function findSelected(nodes: FileSystemNode[]) {
@@ -824,7 +832,21 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   };
 
   const saveMacroSnapshot = useCallback(() => {
-    const snapshot: AppStateSnapshot = { fileTree: JSON.parse(JSON.stringify(fileTree)), selectedFileIds: getSelectedFileIds(fileTree) };
+    // Filter out _fileHandle before stringifying for snapshot
+    const cleanTreeForSnapshot = (nodes: FileSystemNode[]): FileSystemNode[] => {
+        return nodes.map(node => {
+            const { _fileHandle, ...restOfNode } = node as FileNode;
+            const cleanNode = { ...restOfNode } as FileSystemNode;
+            if (cleanNode.type === 'directory' && cleanNode.children) {
+                (cleanNode as DirectoryNode).children = cleanTreeForSnapshot(cleanNode.children);
+            }
+            return cleanNode;
+        });
+    };
+    const snapshot: AppStateSnapshot = { 
+        fileTree: cleanTreeForSnapshot(fileTree), 
+        selectedFileIds: getSelectedFileIds(fileTree) 
+    };
     setMacroUndoStack(prev => [...prev, snapshot].slice(-10));
     setMacroRedoStack([]);
   }, [fileTree]);
@@ -835,7 +857,21 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
 
     saveMacroSnapshot();
 
-    let currentTree = JSON.parse(JSON.stringify(fileTree));
+    let currentTree = JSON.parse(JSON.stringify(fileTree)); // Create a working copy
+     // Ensure _fileHandles are cleaned from this working copy if they existed before stringify
+    const cleanTreeFromWorkingCopy = (nodes: FileSystemNode[]): FileSystemNode[] => {
+        return nodes.map(node => {
+            const { _fileHandle, ...restOfNode } = node as FileNode;
+            const cleanNode = { ...restOfNode } as FileSystemNode;
+            if (cleanNode.type === 'directory' && cleanNode.children) {
+                (cleanNode as DirectoryNode).children = cleanTreeFromWorkingCopy(cleanNode.children);
+            }
+            return cleanNode;
+        });
+    };
+    currentTree = cleanTreeFromWorkingCopy(currentTree);
+
+
     const newSelectedFileIds = getSelectedFileIds(currentTree);
 
     macro.operations
@@ -893,8 +929,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const undoMacroExecution = () => {
     if (macroUndoStack.length > 0) {
       const lastState = macroUndoStack[macroUndoStack.length - 1];
-      const currentSnapshot: AppStateSnapshot = { fileTree: JSON.parse(JSON.stringify(fileTree)), selectedFileIds: getSelectedFileIds(fileTree) };
-      setMacroRedoStack(prev => [currentSnapshot, ...prev].slice(-10));
+      saveMacroSnapshot(); // Save current state to redo before reverting
       setMacroUndoStack(prev => prev.slice(0, -1));
        const applySelectionsFromSnapshot = (nodes: FileSystemNode[], selectedIds: Set<UID>): FileSystemNode[] => {
             return nodes.map(node => {
@@ -910,8 +945,6 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const redoMacroExecution = () => {
     if (macroRedoStack.length > 0) {
       const nextState = macroRedoStack[0];
-      const currentSnapshot: AppStateSnapshot = { fileTree: JSON.parse(JSON.stringify(fileTree)), selectedFileIds: getSelectedFileIds(fileTree) };
-      setMacroUndoStack(prev => [...prev, currentSnapshot].slice(-10));
       setMacroRedoStack(prev => prev.slice(1));
       const applySelectionsFromSnapshot = (nodes: FileSystemNode[], selectedIds: Set<UID>): FileSystemNode[] => {
           return nodes.map(node => {
@@ -925,7 +958,6 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   };
 
 
-  // --- Export Logic ---
   const applyCompressionRulesToFileContent = (content: string, fileNode: FileNode, rulesetIdToApply: UID | null): string => {
     let currentContent = content;
     const appliedRulesDescriptions: string[] = [];
@@ -961,8 +993,8 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
                    !trimmed.startsWith('#') &&
                    !trimmed.startsWith(';') &&
                    !trimmed.startsWith('--') &&
-                   !trimmed.startsWith("'") &&
-                   !trimmed.startsWith('%');
+                   !trimmed.startsWith("'") && // VBScript/Basic
+                   !trimmed.startsWith('%');  // MATLAB/LaTeX
         }).join('\n');
     }
     if (effectiveCompressionOptions.minify) { /* Minify logic placeholder */ }
