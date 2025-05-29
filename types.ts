@@ -18,8 +18,9 @@ export interface FileSystemNode {
 
 export interface FileNode extends FileSystemNode {
   type: 'file';
-  content?: string; // Loaded content or placeholder
-  totalLines?: number; // Calculated total lines
+  content?: string; // Loaded content or placeholder, undefined if not loaded yet
+  totalLines?: number; // Calculated total lines, undefined if not calculated
+  _fileHandle?: FileSystemFileHandle; // Temporary handle for deferred loading
 }
 
 export interface DirectoryNode extends FileSystemNode {

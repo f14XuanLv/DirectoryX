@@ -17,11 +17,6 @@ import {
 
 const generateId = (): UID => Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
 
-const DEFAULT_EXCLUDE_FOLDERS = ['node_modules', '.git', '.svn', '.hg', '.idea', '.vscode', 'target', 'build', 'dist', '__pycache__', 'venv', '.env'];
-const DEFAULT_EXCLUDE_FILE_EXTENSIONS_PATTERNS = [
-    '.DS_Store', '.Spotlight-V100', '.Trashes', 'Thumbs.db', 
-];
-
 // localStorage keys
 const LS_KEYS = {
   MATCHES: 'directoryx_matches',
@@ -219,9 +214,9 @@ const updateDescendantFileSelectionsInTree = (
 
 export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const [fileTree, setFileTree] = useState<FileSystemNode[]>([]);
-  const [globalSettings, _setGlobalSettings] = useState<GlobalExportSettings>({
-    defaultExcludeFolders: DEFAULT_EXCLUDE_FOLDERS,
-    defaultExcludeFiles: DEFAULT_EXCLUDE_FILE_EXTENSIONS_PATTERNS,
+  const [_globalSettings, _setGlobalSettings] = useState<GlobalExportSettings>({
+    defaultExcludeFolders: [], // Not used directly by current import logic, but kept for potential future use
+    defaultExcludeFiles: [], // Not used directly by current import logic
   });
 
   const [matches, setMatches] = useState<Match[]>(() => loadFromLocalStorage(LS_KEYS.MATCHES, DEFAULT_MATCHES));
@@ -261,7 +256,6 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
         setSelectedCompressionRulesetId(RULESET_ID_DEFAULT_COMPRESSION);
         setSelectedLineLimitRulesetId(RULESET_ID_DEFAULT_LINELIMIT);
         
-        // Clear from localStorage
         Object.values(LS_KEYS).forEach(key => localStorage.removeItem(key));
         alert("所有配置已重置为默认值。");
     }
@@ -269,8 +263,8 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
 
   // --- FileTree Snapshot and Undo/Redo ---
   const saveFileTreeSnapshot = useCallback(() => {
-    const snapshot: AppStateSnapshot = { fileTree: JSON.parse(JSON.stringify(fileTree)) }; // Deep copy
-    setFileTreeUndoStack(prev => [...prev, snapshot].slice(-20)); // Limit stack size
+    const snapshot: AppStateSnapshot = { fileTree: JSON.parse(JSON.stringify(fileTree)) }; 
+    setFileTreeUndoStack(prev => [...prev, snapshot].slice(-20)); 
     setFileTreeRedoStack([]);
   }, [fileTree]);
 
@@ -341,14 +335,12 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     });
   };
 
-
   // --- Import Directory & Rule Application ---
   const applyImportRules = (nodes: FileSystemNode[], rulesetIdToApply: UID | null): FileSystemNode[] => {
     const ruleset = rulesetIdToApply ? rulesets.find(rs => rs.id === rulesetIdToApply && rs.type === RuleType.IMPORT) : null;
-    if (!ruleset || ruleset.rules.length === 0) return nodes;
+    if (!ruleset || ruleset.rules.length === 0) return nodes; // No rules to apply, return original tree
 
-    const sortedRuleInstances = [...ruleset.rules].sort((a, b) => b.priority - a.priority);
-
+    const sortedRuleInstances = [...ruleset.rules].sort((a, b) => b.priority - a.priority); // Higher number = higher priority (processed first)
     let decisionMap = new Map<UID, { included: boolean, reason: string }>();
 
     function processNode(node: FileSystemNode, parentDecision: {included: boolean, reason: string} | null) {
@@ -383,22 +375,59 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
             node.children.forEach(child => processNode(child, { included: nodeIncluded, reason: `父文件夹 (${node.name}) ${nodeIncluded ? '已导入' : '已取消导入'}` }));
         }
     }
+    
+    // Initialize with default rule: import all. This ensures nodes not matching any specific rule still have a base decision.
+    // The actual processNode will then apply specific rules.
+    nodes.forEach(node => processNode(node, {included: true, reason: "默认导入"})); 
 
-    nodes.forEach(node => processNode(node, null));
 
     const filterTree = (nodesToFilter: FileSystemNode[]): FileSystemNode[] => {
       return nodesToFilter
-        .filter(node => decisionMap.get(node.id)?.included)
-        .map(node => {
+        .map(node => { // Map first to ensure children are processed before parent is potentially filtered out
           if (node.type === 'directory' && node.children) {
-            return { ...node, children: filterTree(node.children) };
+            const filteredChildren = filterTree(node.children);
+            // Only keep directory if it's included OR it has included children
+            if (decisionMap.get(node.id)?.included || filteredChildren.length > 0) {
+              return { ...node, children: filteredChildren };
+            }
+            return null; // Directory itself is excluded and has no included children
           }
-          return node;
-        });
+          // For files, just check decisionMap
+          return decisionMap.get(node.id)?.included ? node : null;
+        })
+        .filter(node => node !== null) as FileSystemNode[]; // Remove nulls
     };
     
     return filterTree(JSON.parse(JSON.stringify(nodes))); 
   };
+  
+  const loadContentForRemainingFiles = async (nodes: FileSystemNode[]): Promise<FileSystemNode[]> => {
+    const updatedNodesPromises = nodes.map(async (node) => {
+        let updatedNode = { ...node };
+        if (updatedNode.type === 'file') {
+            const fileNode = updatedNode as FileNode;
+            // Load content only if _fileHandle exists and content hasn't been set (e.g. for binary placeholders)
+            if (fileNode._fileHandle && typeof fileNode.content === 'undefined') { 
+                try {
+                    const file = await (fileNode._fileHandle as FileSystemFileHandle).getFile();
+                    const textContent = await file.text();
+                    fileNode.content = textContent;
+                    fileNode.totalLines = textContent.split('\n').length;
+                } catch (e) {
+                    console.error(`Error loading content for ${fileNode.path}:`, e);
+                    fileNode.content = "[错误：无法加载文件内容]";
+                    fileNode.totalLines = 0;
+                }
+            }
+            delete fileNode._fileHandle; // Clean up handle after loading or if not needed
+        } else if (updatedNode.type === 'directory' && updatedNode.children) {
+            (updatedNode as DirectoryNode).children = await loadContentForRemainingFiles(updatedNode.children);
+        }
+        return updatedNode;
+    });
+    return Promise.all(updatedNodesPromises);
+  };
+
 
   const importDirectory = async (handles?: FileSystemDirectoryHandle[]) => {
     saveFileTreeSnapshot();
@@ -410,27 +439,48 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     const processHandle = async (handle: FileSystemHandle, parentId: UID | null, currentPath: string): Promise<FileSystemNode | null> => {
         const itemType = handle.kind as ('file' | 'directory');
         const nodeId = `node-${idCounter++}-${handle.name.replace(/[^a-zA-Z0-9_.-]/g, '')}`; 
-        // Ensure path segments are joined by '/', remove leading/trailing slashes from segment, then join.
         const newSegment = handle.name.replace(/^\/+|\/+$/g, '');
         const path = currentPath ? `${currentPath}/${newSegment}` : newSegment;
 
-
         if (itemType === 'file') {
             const fileHandle = handle as FileSystemFileHandle;
-            let content = ""; let totalLines = 0; const noLines = isNoLinesContent(handle.name);
-            try {
-                const file = await fileHandle.getFile();
-                if (!noLines) { content = await file.text(); totalLines = content.split('\n').length; }
-                else { content = "[二进制或非文本文件内容不加载]"; }
-            } catch (e) { content = noLines ? "[二进制或非文本文件内容不加载]" : "[无法读取文件内容]"; }
-            
-            return {
-                id: nodeId, name: handle.name, type: 'file', path, parentId, selected: false, content, totalLines,
-                lineLimitOverride: noLines ? {
+            const noLines = isNoLinesContent(handle.name);
+            let nodeContent: string | undefined = undefined;
+            let nodeTotalLines: number | undefined = undefined;
+            let nodeLineLimitOverride: LineLimitRule | null = null;
+            let tempFileHandleForLaterLoading: FileSystemFileHandle | undefined = undefined;
+
+            if (noLines) {
+                nodeContent = "[二进制或非文本文件内容不加载]";
+                nodeTotalLines = 0;
+                nodeLineLimitOverride = { 
                     id: generateId(), name: '默认无内容', description: '二进制/非文本文件默认不导出内容',
                     ruleType: RuleType.LINE_LIMIT, matchIds: [],
                     limitType: LineLimitRuleTypeOption.NO_LINES, params: {}
-                } : null,
+                };
+            } else {
+                // Store handle for deferred loading if it's a real directory import
+                // For mock/example, content is loaded directly below if handle is mock.
+                if (handles && handles.length > 0) { // Check if it's a real import
+                     tempFileHandleForLaterLoading = fileHandle;
+                } else { // It's a mock/example import
+                    try {
+                        const file = await fileHandle.getFile(); // This is fine for mock
+                        nodeContent = await file.text();
+                        nodeTotalLines = nodeContent.split('\n').length;
+                    } catch (e) {
+                        nodeContent = "[无法读取模拟文件内容]";
+                        nodeTotalLines = 0;
+                    }
+                }
+            }
+            
+            return {
+                id: nodeId, name: handle.name, type: 'file', path, parentId, selected: false, 
+                content: nodeContent, 
+                totalLines: nodeTotalLines,
+                lineLimitOverride: nodeLineLimitOverride,
+                _fileHandle: tempFileHandleForLaterLoading, 
             } as FileNode;
         } else { 
             const dirNode: DirectoryNode = { id: nodeId, name: handle.name, type: 'directory', path, parentId, children: [] };
@@ -448,62 +498,17 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     try {
       if (handles && handles.length > 0) {
         for (const handle of handles) { 
-          const rootNode = await processHandle(handle, null, ""); // Root nodes have empty currentPath initially
+          const rootNode = await processHandle(handle, null, "");
           if (rootNode) rawNodes.push(rootNode);
         }
       } else { 
-        const mockIndexTs: FileSystemFileHandle = { 
-            name: "index.ts", kind: 'file', isSameEntry: async () => false, 
-            getFile: async () => new File(["console.log('hello world from mock index.ts');\n// another line"], "index.ts", {type: "text/typescript"}),
-            createWritable: async () => ({} as FileSystemWritableFileStream) 
-        };
-        const mockReadmeMd: FileSystemFileHandle = { 
-            name: "README.md", kind: 'file', isSameEntry: async () => false, 
-            getFile: async () => new File(["# Mock Project Readme\n\nThis is a mock project."], "README.md", {type: "text/markdown"}),
-            createWritable: async () => ({} as FileSystemWritableFileStream) 
-        };
-        const mockSrcDir: FileSystemDirectoryHandle = {
-            name: "src", kind: 'directory', isSameEntry: async () => false, 
-            values: async function*(): AsyncGenerator<FileSystemHandle, void, undefined> { yield mockIndexTs; },
-            keys: async function*(): AsyncGenerator<string, void, undefined> { yield mockIndexTs.name; },
-            entries: async function*(): AsyncGenerator<[string, FileSystemHandle], void, undefined> { yield [mockIndexTs.name, mockIndexTs]; },
-            async *[Symbol.asyncIterator](): AsyncGenerator<[string, FileSystemHandle], void, undefined> {
-                for await (const entry of this.entries()) {
-                    yield entry;
-                }
-            },
-            getDirectoryHandle: async () => ({} as FileSystemDirectoryHandle), 
-            getFileHandle: async () => ({} as FileSystemFileHandle), 
-            removeEntry: async () => {}, 
-            resolve: async () => null, 
-        };
-        
-        const mockRoot: FileSystemDirectoryHandle = { 
-            name: "示例项目", kind: 'directory', isSameEntry: async () => false, 
-            values: async function*(): AsyncGenerator<FileSystemHandle, void, undefined> { 
-                yield mockSrcDir;
-                yield mockReadmeMd; 
-            },
-            keys: async function*(): AsyncGenerator<string, void, undefined> {
-                yield mockSrcDir.name;
-                yield mockReadmeMd.name;
-            },
-            entries: async function*(): AsyncGenerator<[string, FileSystemHandle], void, undefined> {
-                yield [mockSrcDir.name, mockSrcDir];
-                yield [mockReadmeMd.name, mockReadmeMd];
-            },
-            async *[Symbol.asyncIterator](): AsyncGenerator<[string, FileSystemHandle], void, undefined> {
-                 for await (const entry of this.entries()) {
-                    yield entry;
-                }
-            },
-            getDirectoryHandle: async () => ({} as FileSystemDirectoryHandle), 
-            getFileHandle: async () => ({} as FileSystemFileHandle), 
-            removeEntry: async () => {}, 
-            resolve: async () => null, 
-        };
+        // Simplified Mock Structure: content is loaded synchronously by processHandle for mocks now
+        const mockIndexTsHandle = { name: "index.ts", kind: 'file', getFile: async () => new File(["console.log('hello from mock index.ts');\n// another line"], "index.ts", {type: "text/typescript"}) } as unknown as FileSystemFileHandle;
+        const mockReadmeMdHandle = { name: "README.md", kind: 'file', getFile: async () => new File(["# Mock Project Readme\nThis is a mock project."], "README.md", {type: "text/markdown"}) } as unknown as FileSystemFileHandle;
+        const mockSrcDirHandle = { name: "src", kind: 'directory', values: async function*() { yield mockIndexTsHandle; } } as unknown as FileSystemDirectoryHandle;
+        const mockRootHandle = { name: "示例项目", kind: 'directory', values: async function*() { yield mockSrcDirHandle; yield mockReadmeMdHandle; } } as unknown as FileSystemDirectoryHandle;
 
-        const rootNode = await processHandle(mockRoot, null, "");
+        const rootNode = await processHandle(mockRootHandle, null, "");
         if (rootNode) rawNodes.push(rootNode);
       }
     } catch (err) {
@@ -512,7 +517,9 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     }
     
     const ruleAppliedTree = applyImportRules(rawNodes, selectedImportRulesetId);
-    setFileTree(ruleAppliedTree);
+    // Load content for files that survived the import rules and aren't binary placeholders
+    const treeWithContentLoaded = await loadContentForRemainingFiles(ruleAppliedTree);
+    setFileTree(treeWithContentLoaded);
   };
 
   const updateNodeSelectionInTree = (nodeId: UID, selected: boolean) => {
@@ -609,7 +616,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
       id: generateId(),
       name: `${originalRuleset.name} (复制)`,
       isDefault: false,
-      rules: originalRuleset.rules.map(ri => ({ ...ri, id: generateId() })), // New instance IDs
+      rules: originalRuleset.rules.map(ri => ({ ...ri, id: generateId() })), 
     };
     setRulesets(prev => [...prev, newRuleset]);
     return newRuleset;
@@ -820,7 +827,6 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     saveMacroSnapshot(); 
 
     let currentTree = JSON.parse(JSON.stringify(fileTree)); 
-
     const newSelectedFileIds = getSelectedFileIds(currentTree); 
 
     macro.operations
@@ -942,13 +948,12 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     if (effectiveCompressionOptions.removeComments) { 
         currentContent = currentContent.split('\n').filter(line => {
             const trimmed = line.trim();
-            // Extended to handle more comment types
             return !trimmed.startsWith('//') && 
                    !trimmed.startsWith('#') && 
                    !trimmed.startsWith(';') &&
-                   !trimmed.startsWith('--') && // For Lua, AppleScript, SQL
-                   !trimmed.startsWith("'") &&  // For VBScript
-                   !trimmed.startsWith('%');   // For MATLAB
+                   !trimmed.startsWith('--') && 
+                   !trimmed.startsWith("'") &&  
+                   !trimmed.startsWith('%');   
         }).join('\n');
     }
     if (effectiveCompressionOptions.minify) { /* Minify logic placeholder */ }
@@ -1013,7 +1018,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
                     newLines.push(`\n... (内容已按 ${n} 行截取，保留 ${n} / ${lines.length} 行) ...\n`);
                 } else if (n >= lines.length) {
                     // no change
-                } else { // n is 0 or invalid
+                } else { 
                      newLines = []; 
                 }
                 break;
@@ -1112,7 +1117,8 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     operations, addOperation, updateOperation, deleteOperation, getOperationById,
     macros, addMacro, updateMacro, deleteMacro, copyMacro, getMacroById,
     addOperationToMacro, updateOperationInMacro, removeOperationFromMacro, replaceOperationInMacro, reorderOperationInMacro,
-    exportContent, globalSettings,
+    exportContent, 
+    globalSettings: _globalSettings,
     fileTreeUndoStack, fileTreeRedoStack, saveFileTreeSnapshot, undoFileTreeAction, redoFileTreeAction,
     canUndoFileTree: fileTreeUndoStack.length > 0,
     canRedoFileTree: fileTreeRedoStack.length > 0,
