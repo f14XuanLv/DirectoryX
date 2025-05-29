@@ -6,11 +6,13 @@ import MatchingLibraryView from './views/MatchingLibraryView';
 import RulesetsView from './views/RulesetsView';
 import MacroOperationsView from './views/MacroOperationsView';
 import { useAppContext } from './contexts/AppContext';
-import { FOLDER_ICON, LIBRARY_ICON, RULE_ICON, MACRO_ICON } from './constants';
+import { FOLDER_ICON, LIBRARY_ICON, RULE_ICON, MACRO_ICON, TRASH_ICON } from './constants';
+import Button from './components/common/Button';
+import Tooltip from './components/common/Tooltip';
 
 const App: React.FC = () => {
   const [activeView, setActiveView] = useState<MainView>(MainView.FILES);
-  const { canUndoMacro, undoMacroExecution, canRedoMacro, redoMacroExecution } = useAppContext();
+  const { canUndoMacro, undoMacroExecution, canRedoMacro, redoMacroExecution, resetAllPersistedData } = useAppContext();
 
   useEffect(() => {
     const handleGlobalKeyDown = (event: KeyboardEvent) => {
@@ -65,11 +67,12 @@ const App: React.FC = () => {
              {React.cloneElement(FOLDER_ICON, { className: "w-8 h-8 mr-3 text-sky-400"})}
             <h1 className="text-2xl font-semibold tracking-tight">DirectoryX - 目录化工具</h1>
           </div>
+          {/* Reset button removed from here */}
         </div>
       </header>
       
       <nav className="bg-slate-700 text-slate-200 shadow">
-        <div className="container mx-auto flex">
+        <div className="container mx-auto flex items-center">
           {navItems.map(item => (
             <button
               key={item.view}
@@ -81,6 +84,18 @@ const App: React.FC = () => {
               {item.label}
             </button>
           ))}
+          <div className="ml-auto"> {/* Pushes the button to the right */}
+            <Tooltip text="重置所有自定义配置为默认值" position="bottom">
+              <Button
+                variant="primary" // Changed to blue
+                size="sm"
+                onClick={resetAllPersistedData}
+                leftIcon={React.cloneElement(TRASH_ICON, { className: "w-4 h-4"})}
+              >
+                重置配置
+              </Button>
+            </Tooltip>
+          </div>
         </div>
       </nav>
 

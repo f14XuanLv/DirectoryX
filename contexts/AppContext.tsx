@@ -1,5 +1,5 @@
 
-import React, { createContext, useState, useContext, useCallback, ReactNode, useMemo } from 'react';
+import React, { createContext, useState, useContext, useCallback, ReactNode, useMemo, useEffect } from 'react';
 import { 
   UID, FileSystemNode, FileNode, DirectoryNode, AppStateSnapshot,
   Match, Rule, Ruleset, Operation, Macro, RuleInstance, OperationInstance,
@@ -27,6 +27,38 @@ const wildcardToRegex = (pattern: string): RegExp => {
     const escapedPattern = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&'); // Escape regex special chars
     const regexPattern = escapedPattern.replace(/\*/g, '.*').replace(/\?/g, '.');
     return new RegExp(`^${regexPattern}$`, 'i'); // Case-insensitive
+};
+
+// localStorage keys
+const LS_KEYS = {
+  MATCHES: 'directoryx_matches',
+  RULES: 'directoryx_rules',
+  RULESETS: 'directoryx_rulesets',
+  OPERATIONS: 'directoryx_operations',
+  MACROS: 'directoryx_macros',
+  SELECTED_IMPORT_RULESET_ID: 'directoryx_selectedImportRulesetId',
+  SELECTED_COMPRESSION_RULESET_ID: 'directoryx_selectedCompressionRulesetId',
+  SELECTED_LINE_LIMIT_RULESET_ID: 'directoryx_selectedLineLimitRulesetId',
+};
+
+// Helper function to load from localStorage
+const loadFromLocalStorage = <T,>(key: string, defaultValue: T): T => {
+  try {
+    const item = localStorage.getItem(key);
+    return item ? JSON.parse(item) : defaultValue;
+  } catch (error) {
+    console.warn(`Error reading localStorage key "${key}":`, error);
+    return defaultValue;
+  }
+};
+
+// Helper function to save to localStorage
+const saveToLocalStorage = <T,>(key: string, value: T): void => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    console.error(`Error writing to localStorage key "${key}":`, error);
+  }
 };
 
 
@@ -119,6 +151,9 @@ interface AppContextType {
   redoMacroExecution: () => void;
   canUndoMacro: boolean;
   canRedoMacro: boolean;
+
+  // Function to reset all persisted data to defaults
+  resetAllPersistedData: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -173,20 +208,48 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     defaultExcludeFiles: DEFAULT_EXCLUDE_FILE_EXTENSIONS_PATTERNS,
   });
 
-  const [matches, setMatches] = useState<Match[]>(DEFAULT_MATCHES);
-  const [rules, setRules] = useState<Rule[]>(DEFAULT_RULES);
-  const [rulesets, setRulesets] = useState<Ruleset[]>(DEFAULT_RULESETS);
-  const [operations, setOperations] = useState<Operation[]>(DEFAULT_OPERATIONS);
-  const [macros, setMacros] = useState<Macro[]>(DEFAULT_MACROS);
+  const [matches, setMatches] = useState<Match[]>(() => loadFromLocalStorage(LS_KEYS.MATCHES, DEFAULT_MATCHES));
+  const [rules, setRules] = useState<Rule[]>(() => loadFromLocalStorage(LS_KEYS.RULES, DEFAULT_RULES));
+  const [rulesets, setRulesets] = useState<Ruleset[]>(() => loadFromLocalStorage(LS_KEYS.RULESETS, DEFAULT_RULESETS));
+  const [operations, setOperations] = useState<Operation[]>(() => loadFromLocalStorage(LS_KEYS.OPERATIONS, DEFAULT_OPERATIONS));
+  const [macros, setMacros] = useState<Macro[]>(() => loadFromLocalStorage(LS_KEYS.MACROS, DEFAULT_MACROS));
 
-  const [selectedImportRulesetId, setSelectedImportRulesetId] = useState<UID | null>(RULESET_ID_DEFAULT_IMPORT);
-  const [selectedCompressionRulesetId, setSelectedCompressionRulesetId] = useState<UID | null>(RULESET_ID_DEFAULT_COMPRESSION);
-  const [selectedLineLimitRulesetId, setSelectedLineLimitRulesetId] = useState<UID | null>(RULESET_ID_DEFAULT_LINELIMIT);
+  const [selectedImportRulesetId, setSelectedImportRulesetId] = useState<UID | null>(() => loadFromLocalStorage(LS_KEYS.SELECTED_IMPORT_RULESET_ID, RULESET_ID_DEFAULT_IMPORT));
+  const [selectedCompressionRulesetId, setSelectedCompressionRulesetId] = useState<UID | null>(() => loadFromLocalStorage(LS_KEYS.SELECTED_COMPRESSION_RULESET_ID, RULESET_ID_DEFAULT_COMPRESSION));
+  const [selectedLineLimitRulesetId, setSelectedLineLimitRulesetId] = useState<UID | null>(() => loadFromLocalStorage(LS_KEYS.SELECTED_LINE_LIMIT_RULESET_ID, RULESET_ID_DEFAULT_LINELIMIT));
   
   const [fileTreeUndoStack, setFileTreeUndoStack] = useState<AppStateSnapshot[]>([]);
   const [fileTreeRedoStack, setFileTreeRedoStack] = useState<AppStateSnapshot[]>([]);
   const [macroUndoStack, setMacroUndoStack] = useState<AppStateSnapshot[]>([]);
   const [macroRedoStack, setMacroRedoStack] = useState<AppStateSnapshot[]>([]);
+
+  // Effects to save to localStorage when state changes
+  useEffect(() => { saveToLocalStorage(LS_KEYS.MATCHES, matches); }, [matches]);
+  useEffect(() => { saveToLocalStorage(LS_KEYS.RULES, rules); }, [rules]);
+  useEffect(() => { saveToLocalStorage(LS_KEYS.RULESETS, rulesets); }, [rulesets]);
+  useEffect(() => { saveToLocalStorage(LS_KEYS.OPERATIONS, operations); }, [operations]);
+  useEffect(() => { saveToLocalStorage(LS_KEYS.MACROS, macros); }, [macros]);
+  useEffect(() => { saveToLocalStorage(LS_KEYS.SELECTED_IMPORT_RULESET_ID, selectedImportRulesetId); }, [selectedImportRulesetId]);
+  useEffect(() => { saveToLocalStorage(LS_KEYS.SELECTED_COMPRESSION_RULESET_ID, selectedCompressionRulesetId); }, [selectedCompressionRulesetId]);
+  useEffect(() => { saveToLocalStorage(LS_KEYS.SELECTED_LINE_LIMIT_RULESET_ID, selectedLineLimitRulesetId); }, [selectedLineLimitRulesetId]);
+
+
+  const resetAllPersistedData = useCallback(() => {
+    if (window.confirm("确定要将所有匹配项、规则、规则集、操作和宏恢复到默认设置吗？此操作不可撤销。")) {
+        setMatches(DEFAULT_MATCHES);
+        setRules(DEFAULT_RULES);
+        setRulesets(DEFAULT_RULESETS);
+        setOperations(DEFAULT_OPERATIONS);
+        setMacros(DEFAULT_MACROS);
+        setSelectedImportRulesetId(RULESET_ID_DEFAULT_IMPORT);
+        setSelectedCompressionRulesetId(RULESET_ID_DEFAULT_COMPRESSION);
+        setSelectedLineLimitRulesetId(RULESET_ID_DEFAULT_LINELIMIT);
+        
+        // Clear from localStorage
+        Object.values(LS_KEYS).forEach(key => localStorage.removeItem(key));
+        alert("所有配置已重置为默认值。");
+    }
+  }, []);
 
   // --- FileTree Snapshot and Undo/Redo ---
   const saveFileTreeSnapshot = useCallback(() => {
@@ -255,8 +318,8 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
 
 
   // --- Import Directory & Rule Application ---
-  const applyImportRules = (nodes: FileSystemNode[], rulesetId: UID | null): FileSystemNode[] => {
-    const ruleset = rulesetId ? rulesets.find(rs => rs.id === rulesetId && rs.type === RuleType.IMPORT) : null;
+  const applyImportRules = (nodes: FileSystemNode[], rulesetIdToApply: UID | null): FileSystemNode[] => {
+    const ruleset = rulesetIdToApply ? rulesets.find(rs => rs.id === rulesetIdToApply && rs.type === RuleType.IMPORT) : null;
     if (!ruleset || ruleset.rules.length === 0) return nodes;
 
     const sortedRuleInstances = [...ruleset.rules].sort((a, b) => b.priority - a.priority);
@@ -820,7 +883,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
 
 
   // --- Export Logic ---
-  const applyCompressionRulesToFileContent = (content: string, fileNode: FileNode, rulesetId: UID | null): string => {
+  const applyCompressionRulesToFileContent = (content: string, fileNode: FileNode, rulesetIdToApply: UID | null): string => {
     let currentContent = content;
     const appliedRulesDescriptions: string[] = [];
 
@@ -830,7 +893,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
         Object.assign(effectiveCompressionOptions, fileNode.compressionOverride);
         appliedRulesDescriptions.push("文件特定压缩覆盖");
     } else {
-        const ruleset = rulesetId ? rulesets.find(rs => rs.id === rulesetId && rs.type === RuleType.COMPRESSION) : null;
+        const ruleset = rulesetIdToApply ? rulesets.find(rs => rs.id === rulesetIdToApply && rs.type === RuleType.COMPRESSION) : null;
         if (ruleset) {
             ruleset.rules
                 .filter(ri => ri.enabled)
@@ -858,7 +921,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     return currentContent;
   };
 
-  const applyLineLimitRulesToFileContent = (content: string, fileNode: FileNode, rulesetId: UID | null): { limitedContent: string, ruleAppliedInfo: string } => {
+  const applyLineLimitRulesToFileContent = (content: string, fileNode: FileNode, rulesetIdToApply: UID | null): { limitedContent: string, ruleAppliedInfo: string } => {
     let currentContent = content;
     let ruleAppliedInfo = "";
     let lineLimitRuleToApply: LineLimitRule | null = null;
@@ -866,7 +929,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     if (fileNode.lineLimitOverride) {
         lineLimitRuleToApply = fileNode.lineLimitOverride;
     } else { 
-        const ruleset = rulesetId ? rulesets.find(rs => rs.id === rulesetId && rs.type === RuleType.LINE_LIMIT) : null;
+        const ruleset = rulesetIdToApply ? rulesets.find(rs => rs.id === rulesetIdToApply && rs.type === RuleType.LINE_LIMIT) : null;
         if (ruleset) {
             const sortedRuleInstances = ruleset.rules
                 .filter(ri => ri.enabled)
@@ -1022,6 +1085,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     macroUndoStack, macroRedoStack, executeMacro, undoMacroExecution, redoMacroExecution,
     canUndoMacro: macroUndoStack.length > 0,
     canRedoMacro: macroRedoStack.length > 0,
+    resetAllPersistedData
   };
 
   return <AppContext.Provider value={contextValue}>{children}</AppContext.Provider>;

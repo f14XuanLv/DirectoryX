@@ -30,7 +30,7 @@ const Tooltip: React.FC<TooltipProps> = ({ text, children, position = 'top' }) =
       {isVisible && (
         <div
           role="tooltip"
-          className={`absolute z-10 px-3 py-1.5 text-xs font-medium text-white bg-gray-900 rounded-md shadow-sm opacity-90 whitespace-nowrap ${positionClasses[position]}`}
+          className={`absolute z-[60] px-3 py-1.5 text-xs font-medium text-white bg-gray-900 rounded-md shadow-sm opacity-90 whitespace-nowrap ${positionClasses[position]}`}
         >
           {text}
           <div 
