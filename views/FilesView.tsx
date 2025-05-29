@@ -79,13 +79,13 @@ const FileSystemTreeItem: React.FC<FileSystemTreeItemProps> = React.memo(({
 
             {isDirectory && showActions && (
             <>
-                <Tooltip text="全选此文件夹内文件"><Button size="sm" variant="ghost" onClick={() => onSelectAllChildren(node.id, true)}>全选</Button></Tooltip>
-                <Tooltip text="全不选此文件夹内文件"><Button size="sm" variant="ghost" onClick={() => onSelectAllChildren(node.id, false)}>不选</Button></Tooltip>
-                <Tooltip text="反选此文件夹内文件"><Button size="sm" variant="ghost" onClick={() => onInvertSelectionChildren(node.id)}>反选</Button></Tooltip>
+                <Tooltip text="全选此文件夹内文件"><Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); onSelectAllChildren(node.id, true); }}>全选</Button></Tooltip>
+                <Tooltip text="全不选此文件夹内文件"><Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); onSelectAllChildren(node.id, false); }}>不选</Button></Tooltip>
+                <Tooltip text="反选此文件夹内文件"><Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); onInvertSelectionChildren(node.id); }}>反选</Button></Tooltip>
             </>
             )}
             <Tooltip text="属性">
-                <Button size="sm" variant="ghost" onClick={() => onOpenProperties(node)} className="text-slate-500 hover:text-slate-700" aria-label={`属性 ${node.name}`}>
+                <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); onOpenProperties(node);}} className="text-slate-500 hover:text-slate-700" aria-label={`属性 ${node.name}`}>
                     {React.cloneElement(PROPERTIES_ICON, {className:"w-4 h-4"})}
                 </Button>
             </Tooltip>
@@ -263,15 +263,27 @@ const FilesView: React.FC = () => {
 
   const [highlightedNodeId, setHighlightedNodeId] = useState<UID | undefined>(undefined);
   const [importErrorType, setImportErrorType] = useState<'none' | 'crossOrigin' | 'apiUnavailable' | 'generic'>('none');
+  const isNewImportRef = useRef(false);
 
 
-  useEffect(() => { 
+  useEffect(() => {
     if (fileTree.length > 0) {
-      const initialExpanded = new Set<UID>();
-      fileTree.forEach(node => { if (node.type === 'directory') initialExpanded.add(node.id);});
-      setExpandedNodes(initialExpanded);
-    } else { setExpandedNodes(new Set()); }
-  }, [fileTree]);
+      if (isNewImportRef.current) { // Only reset if a new import just happened
+        const initialExpanded = new Set<UID>();
+        fileTree.forEach(node => {
+          if (node.type === 'directory') {
+            initialExpanded.add(node.id);
+          }
+        });
+        setExpandedNodes(initialExpanded);
+        isNewImportRef.current = false; // Reset the flag
+      }
+      // If not a new import, expandedNodes is preserved.
+    } else {
+      // If fileTree becomes empty (e.g., project cleared), reset expandedNodes.
+      setExpandedNodes(new Set());
+    }
+  }, [fileTree]); 
 
   useEffect(() => { 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -371,6 +383,7 @@ const FilesView: React.FC = () => {
   
   const handleImportDirectory = async () => {
     setImportErrorType('none'); 
+    isNewImportRef.current = true; // Signal that a new import is about to happen
     try {
       if (typeof window.showDirectoryPicker !== 'function') {
         console.warn("window.showDirectoryPicker API 不可用。将使用预设的示例项目。");
@@ -383,6 +396,7 @@ const FilesView: React.FC = () => {
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         console.log("用户取消了目录选择。");
+        isNewImportRef.current = false; // Reset flag if aborted
         return; 
       }
       
@@ -396,6 +410,7 @@ const FilesView: React.FC = () => {
       
       await importDirectory(); 
     }
+    // Note: isNewImportRef.current will be reset by the useEffect after fileTree updates
   };
   
   const handleSelectNode = (nodeId: UID, selected: boolean) => updateNodeSelectionInTree(nodeId, selected);
