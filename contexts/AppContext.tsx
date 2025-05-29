@@ -346,10 +346,9 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const applyImportRules = (nodes: FileSystemNode[], rulesetIdToApply: UID | null): FileSystemNode[] => {
     const ruleset = rulesetIdToApply ? rulesets.find(rs => rs.id === rulesetIdToApply && rs.type === RuleType.IMPORT) : null;
     if (!ruleset || ruleset.rules.length === 0) {
-        // If no ruleset or no rules, all nodes are included by default (maintaining _fileHandle)
         const includeAll = (originalNodes: FileSystemNode[]): FileSystemNode[] => {
             return originalNodes.map(node => {
-                const copiedNode = { ...node }; // Shallow copy to preserve _fileHandle
+                const copiedNode = { ...node };
                 if (copiedNode.type === 'directory' && copiedNode.children) {
                     (copiedNode as DirectoryNode).children = includeAll(copiedNode.children);
                 }
@@ -365,66 +364,87 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
 
     const decisionMap = new Map<UID, { included: boolean; reason: string }>();
 
-    function determineNodeDecision(node: FileSystemNode, parentDecision: { included: boolean; reason: string }) {
-        let isIncluded = parentDecision.included;
-        let reason = parentDecision.reason;
-        let ruleMatchedThisNode = false;
+    function determineNodeDecision(node: FileSystemNode, parentIsAllowedToBeIncluded: boolean) {
+        let isIncludedByOwnRules = true; // Default assumption for this node if no rules apply to it directly
+        let reasonForOwnRules = "默认包含 (无特定规则匹配)";
+        let matchedSpecificRule = false;
 
         for (const ruleInstance of sortedRuleInstances) {
             const rule = rules.find(r => r.id === ruleInstance.ruleId && r.ruleType === RuleType.IMPORT) as ImportRule | undefined;
             if (!rule) continue;
 
+            // Check if rule's action type is applicable to the node's type
+            const ruleIsForFolders = rule.actionType === ImportRuleActionType.IMPORT_FOLDER || rule.actionType === ImportRuleActionType.CANCEL_IMPORT_FOLDER;
+            const ruleIsForFiles = rule.actionType === ImportRuleActionType.IMPORT_FILE || rule.actionType === ImportRuleActionType.CANCEL_IMPORT_FILE;
+
+            if ((node.type === 'file' && !ruleIsForFiles) || (node.type === 'directory' && !ruleIsForFolders)) {
+                continue; // Skip rule if its action type doesn't match node type
+            }
+            
             if (checkNodeMatchesAny(node, rule.matchIds)) {
-                ruleMatchedThisNode = true;
-                reason = `规则: ${rule.name}`;
+                matchedSpecificRule = true;
+                reasonForOwnRules = `规则: ${rule.name}`;
                 switch (rule.actionType) {
                     case ImportRuleActionType.IMPORT_FILE:
-                        if (node.type === 'file') isIncluded = true;
-                        break;
                     case ImportRuleActionType.IMPORT_FOLDER:
-                        if (node.type === 'directory') isIncluded = true;
+                        isIncludedByOwnRules = true;
                         break;
                     case ImportRuleActionType.CANCEL_IMPORT_FILE:
-                        if (node.type === 'file') isIncluded = false;
-                        break;
                     case ImportRuleActionType.CANCEL_IMPORT_FOLDER:
-                        if (node.type === 'directory') isIncluded = false;
+                        isIncludedByOwnRules = false;
                         break;
                 }
-                break;
+                break; // This node's status (based on its own rules) is now determined.
             }
         }
         
-        decisionMap.set(node.id, { included: isIncluded, reason });
+        // The final decision for this node depends on whether its parent allows it AND its own rule evaluation.
+        const finalDecisionForThisNode = parentIsAllowedToBeIncluded && isIncludedByOwnRules;
+        
+        let finalReason = reasonForOwnRules;
+        if (!parentIsAllowedToBeIncluded) {
+            finalReason = "父级已排除";
+        } else if (!isIncludedByOwnRules && matchedSpecificRule) {
+            finalReason = reasonForOwnRules; // Use the specific rule reason for exclusion
+        } else if (isIncludedByOwnRules && !matchedSpecificRule) {
+            finalReason = "默认包含 (无特定规则匹配且父级允许)";
+        }
+
+
+        decisionMap.set(node.id, { included: finalDecisionForThisNode, reason: finalReason });
 
         if (node.type === 'directory' && node.children) {
             node.children.forEach(child => {
-                determineNodeDecision(child, { included: isIncluded, reason: `父文件夹 (${node.name}) ${isIncluded ? '已导入' : '已排除基于规则: ' + reason}` });
+                // Children inherit this node's final effective status as their 'parentIsAllowedToBeIncluded'
+                determineNodeDecision(child, finalDecisionForThisNode);
             });
         }
     }
 
-    nodes.forEach(node => determineNodeDecision(node, { included: true, reason: "默认包含 (待规则过滤)" }));
+    nodes.forEach(node => determineNodeDecision(node, true)); // Top-level nodes start with parentIsAllowedToBeIncluded = true
 
     const filterTree = (nodesToFilter: FileSystemNode[]): FileSystemNode[] => {
       return nodesToFilter
-        .map(node => { // node is from the original 'nodes' array (rawNodes)
+        .map(node => {
           const decision = decisionMap.get(node.id);
-          const isNodeIncluded = decision ? decision.included : false; // Default to false if no decision (should not happen)
+          // Fallback to false if no decision, though every node should have one.
+          const isNodeIncludedInMap = decision ? decision.included : false; 
 
           if (node.type === 'directory' && node.children) {
             const filteredChildren = filterTree(node.children);
-            if (isNodeIncluded || filteredChildren.length > 0) {
-              return { ...node, children: filteredChildren }; // Shallow copy, preserve _fileHandle
+            // A directory is kept if it itself is marked as included OR if it has any children that survived filtering.
+            if (isNodeIncludedInMap || filteredChildren.length > 0) {
+              return { ...node, children: filteredChildren }; 
             }
             return null;
           }
-          return isNodeIncluded ? { ...node } : null; // Shallow copy, preserve _fileHandle
+          // For files, only keep if it's marked as included.
+          return isNodeIncludedInMap ? { ...node } : null; 
         })
         .filter(node => node !== null) as FileSystemNode[];
     };
     
-    return filterTree(nodes); // Pass original nodes (rawNodes)
+    return filterTree(nodes);
   };
 
   const loadContentForRemainingFiles = async (nodes: FileSystemNode[]): Promise<FileSystemNode[]> => {
@@ -444,8 +464,6 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
                     fileNode.totalLines = 0;
                 }
             }
-            // Always delete _fileHandle after attempting to load or if not needed for this stage
-            // to prevent it from being saved in snapshots if not handled there.
             delete fileNode._fileHandle; 
         } else if (updatedNode.type === 'directory' && updatedNode.children) {
             (updatedNode as DirectoryNode).children = await loadContentForRemainingFiles(updatedNode.children);
@@ -486,9 +504,10 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
                     limitType: LineLimitRuleTypeOption.NO_LINES, params: {}
                 };
             } else {
+                // Always defer loading for actual directory imports
                 if (handles && handles.length > 0) { 
                      tempFileHandleForLaterLoading = fileHandle;
-                } else { 
+                } else { // For mock import, load content immediately
                     try {
                         const file = await fileHandle.getFile(); 
                         nodeContent = await file.text();
@@ -526,7 +545,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
           const rootNode = await processHandle(handle, null, "");
           if (rootNode) rawNodes.push(rootNode);
         }
-      } else {
+      } else { // Fallback to mock project
         const mockIndexTsHandle = { name: "index.ts", kind: 'file', getFile: async () => new File(["console.log('hello from mock index.ts');\n// another line"], "index.ts", {type: "text/typescript"}) } as unknown as FileSystemFileHandle;
         const mockReadmeMdHandle = { name: "README.md", kind: 'file', getFile: async () => new File(["# Mock Project Readme\nThis is a mock project."], "README.md", {type: "text/markdown"}) } as unknown as FileSystemFileHandle;
         const mockSrcDirHandle = { name: "src", kind: 'directory', values: async function*() { yield mockIndexTsHandle; } } as unknown as FileSystemDirectoryHandle;
@@ -537,7 +556,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
       }
     } catch (err) {
       console.error("目录导入错误:", err);
-      rawNodes = [];
+      rawNodes = []; // Clear rawNodes on error
     }
 
     const ruleAppliedTree = applyImportRules(rawNodes, selectedImportRulesetId);
