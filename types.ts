@@ -35,20 +35,24 @@ export enum MatchTargetType {
 
 export enum FolderMatchType {
   NAME = '名称匹配',
-  WILDCARD = '通配符匹配', // Glob-like: *, ?
-  REGEX = '正则表达式匹配',
+  WILDCARD = '通配符匹配', // Glob-like for name: *, ?
+  REGEX = '正则表达式匹配', // For name
+  PATH_WILDCARD = '路径通配符匹配', // Glob-like for path: src/**/name, .yarn/cache
+  PATH_REGEX = '路径正则表达式匹配', // For path
 }
 
 export enum FileMatchType {
-  NAME = '名称匹配', // Substring
+  NAME = '名称匹配', // Substring in name
   SUFFIX = '后缀匹配', // Exact suffix, e.g. ".txt"
-  WILDCARD = '通配符匹配', // Glob-like: *.txt, file?.log
-  REGEX = '正则表达式匹配', // Full regex
+  WILDCARD = '通配符匹配', // Glob-like for name: *.txt, file?.log
+  REGEX = '正则表达式匹配', // Full regex for name
+  PATH_WILDCARD = '路径通配符匹配', // Glob-like for path: src/**/*.ts, docs/*.md
+  PATH_REGEX = '路径正则表达式匹配', // For path
 }
 
 export interface MatchConditionItem {
   id: UID;
-  value: string; // e.g., "*.txt", "node_modules"
+  value: string; // e.g., "*.txt", "node_modules", "src/components/*"
 }
 
 export interface BaseMatch {

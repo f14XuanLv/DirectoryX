@@ -7,7 +7,7 @@ import Select from '../components/common/Select';
 import Modal from '../components/common/Modal';
 import { useAppContext } from '../contexts/AppContext';
 import { UID, Match, MatchTargetType, FolderMatchType, FileMatchType, MatchConditionItem, FolderMatch, FileMatch, FileSystemNode, Rule, Operation } from '../types';
-import { PLUS_ICON, TRASH_ICON, PENCIL_ICON, EYE_ICON, COPY_ICON, QUESTION_MARK_ICON, X_MARK_ICON } from '../constants';
+import { PLUS_ICON, TRASH_ICON, PENCIL_ICON, EYE_ICON, COPY_ICON, QUESTION_MARK_ICON, X_MARK_ICON, FILTER_ICON } from '../constants';
 import QueryInput from '../components/common/QueryInput';
 import Tooltip from '../components/common/Tooltip';
 
@@ -40,15 +40,15 @@ const CreateMatchModal: React.FC<CreateMatchModalProps> = ({ isOpen, onClose, on
                 setTargetType(initialMatch.targetType);
                 setConditions(initialMatch.conditions.map(c => ({...c}))); 
                 if (initialMatch.targetType === MatchTargetType.FOLDER) {
-                    setFolderMatchType((initialMatch as FolderMatch).folderMatchType || '');
+                    setFolderMatchType((initialMatch as FolderMatch).folderMatchType || FolderMatchType.NAME);
                     setFileMatchType('');
                 } else {
-                    setFileMatchType((initialMatch as FileMatch).fileMatchType || '');
+                    setFileMatchType((initialMatch as FileMatch).fileMatchType || FileMatchType.NAME);
                     setFolderMatchType('');
                 }
             } else { 
                 setName(''); setDescription(''); setTargetType(MatchTargetType.FILE);
-                setFolderMatchType(FileMatchType.NAME as unknown as FolderMatchType); 
+                setFolderMatchType(FolderMatchType.NAME); 
                 setFileMatchType(FileMatchType.NAME); 
                 setConditions([{id: `cond-${Date.now()}`, value: ''}]);
             }
@@ -126,6 +126,22 @@ const CreateMatchModal: React.FC<CreateMatchModalProps> = ({ isOpen, onClose, on
     const targetTypeOptions = Object.values(MatchTargetType).map(t => ({value: t, label: t}));
     const folderMatchTypeOptions = Object.values(FolderMatchType).map(t => ({value: t, label: t}));
     const fileMatchTypeOptions = Object.values(FileMatchType).map(t => ({value: t, label: t}));
+    
+    const getCurrentConditionPlaceholder = () => {
+        if (targetType === MatchTargetType.FOLDER) {
+            if (folderMatchType === FolderMatchType.PATH_REGEX || folderMatchType === FolderMatchType.REGEX) return "输入正则表达式 (例如: ^\\.(git|svn)$)";
+            if (folderMatchType === FolderMatchType.PATH_WILDCARD) return "输入路径通配符 (例如: src/modules/**/tests)";
+            if (folderMatchType === FolderMatchType.WILDCARD) return "输入名称通配符 (例如: build_*)";
+            return "输入文件夹名称 (例如: node_modules)";
+        } else { // FILE
+            if (fileMatchType === FileMatchType.PATH_REGEX || fileMatchType === FileMatchType.REGEX) return "输入正则表达式 (例如: .*\\.test\\.js$)";
+            if (fileMatchType === FileMatchType.PATH_WILDCARD) return "输入路径通配符 (例如: src/**/*.ts)";
+            if (fileMatchType === FileMatchType.WILDCARD) return "输入名称通配符 (例如: *.log)";
+            if (fileMatchType === FileMatchType.SUFFIX) return "输入后缀 (例如: .txt)";
+            return "输入文件名 (例如: README.md)";
+        }
+    };
+
 
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={initialMatch ? "修改匹配" : "创建新匹配"} size="lg">
@@ -147,7 +163,7 @@ const CreateMatchModal: React.FC<CreateMatchModalProps> = ({ isOpen, onClose, on
                     {conditions.map((cond, index) => (
                         <div key={cond.id} className="flex items-center space-x-2 mb-1.5">
                             <span className="text-sm text-gray-500 w-6 text-right">{index + 1}.</span>
-                            <Input value={cond.value} onChange={e => handleUpdateCondition(cond.id, e.target.value)} className="flex-grow text-sm py-1" placeholder="输入条件值 (例如: *.ts, node_modules, /\\d+/ )"/>
+                            <Input value={cond.value} onChange={e => handleUpdateCondition(cond.id, e.target.value)} className="flex-grow text-sm py-1" placeholder={getCurrentConditionPlaceholder()}/>
                             <Tooltip text="移除此条件"><Button variant="danger" size="sm" onClick={() => handleRemoveCondition(cond.id)}>{React.cloneElement(TRASH_ICON, {className: "w-4 h-4"})}</Button></Tooltip>
                         </div>
                     ))}
@@ -194,6 +210,7 @@ const MatchingLibraryView: React.FC = () => {
   const [matchTestInput, setMatchTestInput] = useState('');
   const [matchTestResult, setMatchTestResult] = useState<boolean | null>(null);
   const [matchTestNodeType, setMatchTestNodeType] = useState<'file' | 'directory'>('file');
+  const [matchTypeFilter, setMatchTypeFilter] = useState<'all' | MatchTargetType.FILE | MatchTargetType.FOLDER>('all');
 
 
   const selectedMatch = useMemo(() => selectedMatchId ? getMatchById(selectedMatchId) : null, [selectedMatchId, getMatchById]);
@@ -250,11 +267,14 @@ const MatchingLibraryView: React.FC = () => {
   };
 
 
-  const filteredMatches = matches.filter(m => 
-    m.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    m.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    m.conditions.some(c => c.value.toLowerCase().includes(searchTerm.toLowerCase()))
-  ).sort((a,b) => a.name.localeCompare(b.name));
+  const filteredMatches = useMemo(() => matches.filter(m => {
+    const termMatch = m.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                      m.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                      m.conditions.some(c => c.value.toLowerCase().includes(searchTerm.toLowerCase()));
+    if (!termMatch) return false;
+    if (matchTypeFilter === 'all') return true;
+    return m.targetType === matchTypeFilter;
+  }).sort((a,b) => a.name.localeCompare(b.name)), [matches, searchTerm, matchTypeFilter]);
 
   const getReferences = (matchId: UID) => {
     const ruleRefs: Rule[] = rules.filter(r => r.matchIds.includes(matchId));
@@ -275,13 +295,39 @@ const MatchingLibraryView: React.FC = () => {
         setMatchTestResult(null);
         return;
     }
+    
+    let currentMatchType: FolderMatchType | FileMatchType | undefined;
+    let inputForTest = matchTestInput.trim();
+    let nodeTypeForTest = selectedMatch.targetType === MatchTargetType.FOLDER ? 'directory' : 'file' as 'file' | 'directory';
+    let nodePathForTest = inputForTest;
+
+
+    if (selectedMatch.targetType === MatchTargetType.FOLDER) {
+        currentMatchType = (selectedMatch as FolderMatch).folderMatchType;
+        if (currentMatchType === FolderMatchType.PATH_REGEX || currentMatchType === FolderMatchType.PATH_WILDCARD) {
+            // Test input is the path
+        } else {
+            // Test input is the name, path is derived for test
+            nodePathForTest = `parent/${inputForTest}`;
+        }
+    } else { // FILE
+        currentMatchType = (selectedMatch as FileMatch).fileMatchType;
+         if (currentMatchType === FileMatchType.PATH_REGEX || currentMatchType === FileMatchType.PATH_WILDCARD) {
+            // Test input is the path
+        } else {
+            // Test input is the name, path is derived for test
+            nodePathForTest = `parent/${inputForTest}`;
+        }
+    }
+
+
     const mockNode: FileSystemNode = {
         id: 'test-node',
-        name: matchTestInput.trim(),
-        path: `/${matchTestInput.trim()}`,
+        name: inputForTest.includes('/') ? inputForTest.substring(inputForTest.lastIndexOf('/') + 1) : inputForTest, // Infer name if path is given
+        path: nodePathForTest, // Use the (potentially constructed) path
         parentId: null,
-        type: selectedMatch.targetType === MatchTargetType.FOLDER ? 'directory' : 'file',
-        children: selectedMatch.targetType === MatchTargetType.FOLDER ? [] : undefined,
+        type: nodeTypeForTest,
+        children: nodeTypeForTest === 'directory' ? [] : undefined,
     };
     setMatchTestResult(checkNodeAgainstMatchConditions(mockNode, selectedMatch));
   };
@@ -295,7 +341,22 @@ const MatchingLibraryView: React.FC = () => {
           <h2 className="text-xl font-semibold text-slate-700">匹配库</h2>
           <Button onClick={() => { setEditingMatch(null); setIsCreateModalOpen(true);}} leftIcon={PLUS_ICON} size="sm">创建匹配</Button>
         </div>
-        <Input placeholder="搜索名称,描述,条件..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="mb-3 text-sm"/>
+        <Input placeholder="搜索名称,描述,条件..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="mb-2 text-sm"/>
+        
+        <div className="mb-3 flex items-center space-x-1">
+            {React.cloneElement(FILTER_ICON, {className: "w-4 h-4 text-slate-500 mr-1"})}
+            {(['all', MatchTargetType.FILE, MatchTargetType.FOLDER] as const).map(type => (
+                 <Button 
+                    key={type}
+                    variant={matchTypeFilter === type ? 'primary' : 'secondary'}
+                    size="sm"
+                    onClick={() => setMatchTypeFilter(type)}
+                    className="text-xs px-2 py-1"
+                 >
+                    {type === 'all' ? '全部' : type}
+                 </Button>
+            ))}
+        </div>
         
         <ul className="space-y-1">
           {filteredMatches.map(match => (
@@ -356,7 +417,12 @@ const MatchingLibraryView: React.FC = () => {
                 <h4 className="text-md font-semibold text-slate-700 mb-2 flex items-center">
                     匹配测试
                     <Tooltip 
-                        text={`输入${selectedMatch.targetType === MatchTargetType.FOLDER ? '文件夹' : '文件'}名称测试。匹配类型: ${selectedMatch.targetType}。匹配方式: ${selectedMatch.targetType === MatchTargetType.FOLDER ? (selectedMatch as FolderMatch).folderMatchType : (selectedMatch as FileMatch).fileMatchType}.`}
+                        text={
+                          `输入${selectedMatch.targetType === MatchTargetType.FOLDER ? '文件夹' : '文件'}` +
+                          `${(selectedMatch.targetType === MatchTargetType.FOLDER && ((selectedMatch as FolderMatch).folderMatchType === FolderMatchType.PATH_REGEX || (selectedMatch as FolderMatch).folderMatchType === FolderMatchType.PATH_WILDCARD)) || (selectedMatch.targetType === MatchTargetType.FILE && ((selectedMatch as FileMatch).fileMatchType === FileMatchType.PATH_REGEX || (selectedMatch as FileMatch).fileMatchType === FileMatchType.PATH_WILDCARD)) ? '相对路径' : '名称'}测试。` +
+                          `匹配类型: ${selectedMatch.targetType}。` +
+                          `匹配方式: ${selectedMatch.targetType === MatchTargetType.FOLDER ? (selectedMatch as FolderMatch).folderMatchType : (selectedMatch as FileMatch).fileMatchType}.`
+                        }
                         position="right"
                     >
                        <span className="ml-1.5 cursor-default">{React.cloneElement(QUESTION_MARK_ICON, {className:"w-4 h-4"})}</span>
@@ -364,7 +430,7 @@ const MatchingLibraryView: React.FC = () => {
                 </h4>
                 <div className="flex items-center space-x-2">
                     <Input 
-                        placeholder={`输入 ${selectedMatch.targetType === MatchTargetType.FOLDER ? '文件夹' : '文件'} 名称进行测试...`} 
+                        placeholder={`输入 ${selectedMatch.targetType === MatchTargetType.FOLDER ? '文件夹' : '文件'} ${((selectedMatch.targetType === MatchTargetType.FOLDER && ((selectedMatch as FolderMatch).folderMatchType === FolderMatchType.PATH_REGEX || (selectedMatch as FolderMatch).folderMatchType === FolderMatchType.PATH_WILDCARD)) || (selectedMatch.targetType === MatchTargetType.FILE && ((selectedMatch as FileMatch).fileMatchType === FileMatchType.PATH_REGEX || (selectedMatch as FileMatch).fileMatchType === FileMatchType.PATH_WILDCARD)) ? '路径' : '名称')}...`} 
                         value={matchTestInput}
                         onChange={e => { setMatchTestInput(e.target.value); setMatchTestResult(null);}} 
                         className="text-sm flex-grow"

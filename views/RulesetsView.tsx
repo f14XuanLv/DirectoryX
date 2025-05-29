@@ -7,8 +7,8 @@ import TextArea from '../components/common/TextArea';
 import Modal from '../components/common/Modal';
 import Checkbox from '../components/common/Checkbox';
 import { useAppContext } from '../contexts/AppContext';
-import { UID, RuleType, Ruleset, Rule, RuleInstance, Match, ImportRuleActionType, CompressionRuleOptions, CompressionRuleTypeOption, LineLimitRuleTypeOption, LineLimitParams, ImportRule, CompressionRule, LineLimitRule } from '../types';
-import { PLUS_ICON, PENCIL_ICON, TRASH_ICON, ARROW_UP_ICON, ARROW_DOWN_ICON, EYE_ICON, COPY_ICON, X_MARK_ICON } from '../constants';
+import { UID, RuleType, Ruleset, Rule, RuleInstance, Match, ImportRuleActionType, CompressionRuleOptions, CompressionRuleTypeOption, LineLimitRuleTypeOption, LineLimitParams, ImportRule, CompressionRule, LineLimitRule, MatchTargetType } from '../types';
+import { PLUS_ICON, PENCIL_ICON, TRASH_ICON, ARROW_UP_ICON, ARROW_DOWN_ICON, EYE_ICON, COPY_ICON, X_MARK_ICON, QUESTION_MARK_ICON } from '../constants';
 import Tooltip from '../components/common/Tooltip';
 import QueryInput from '../components/common/QueryInput';
 
@@ -34,9 +34,19 @@ const CreateRuleModal: React.FC<CreateRuleModalProps> = ({ isOpen, onClose, onSa
     const [lineLimitParams, setLineLimitParams] = useState<LineLimitParams>({});
     
     const relevantMatches = useMemo(() => {
-        if (ruleTypeContext === RuleType.IMPORT) return allMatches;
-        return allMatches.filter(m => m.targetType === '文件');
-    }, [allMatches, ruleTypeContext]);
+        if (ruleTypeContext === RuleType.IMPORT) {
+            if (importActionType === ImportRuleActionType.IMPORT_FOLDER || importActionType === ImportRuleActionType.CANCEL_IMPORT_FOLDER) {
+                return allMatches.filter(m => m.targetType === MatchTargetType.FOLDER);
+            } else if (importActionType === ImportRuleActionType.IMPORT_FILE || importActionType === ImportRuleActionType.CANCEL_IMPORT_FILE) {
+                return allMatches.filter(m => m.targetType === MatchTargetType.FILE);
+            }
+            // If no specific import action type is selected yet, show all matches initially.
+            // Or, you could show none until an action type is selected. For now, showing all to allow exploration.
+            return allMatches; 
+        }
+        // For Compression and Line Limit rules, they typically apply to files.
+        return allMatches.filter(m => m.targetType === MatchTargetType.FILE);
+    }, [allMatches, ruleTypeContext, importActionType]);
 
     useEffect(() => {
         if (isOpen) {
@@ -44,9 +54,14 @@ const CreateRuleModal: React.FC<CreateRuleModalProps> = ({ isOpen, onClose, onSa
                 setName(initialRule.name);
                 setDescription(initialRule.description);
                 setSelectedMatchIds([...initialRule.matchIds]);
-                if (initialRule.ruleType === RuleType.IMPORT) setImportActionType((initialRule as ImportRule).actionType);
-                if (initialRule.ruleType === RuleType.COMPRESSION) setCompressionOptions({removeEmptyLines: (initialRule as CompressionRule).removeEmptyLines, removeComments: (initialRule as CompressionRule).removeComments, minify: (initialRule as CompressionRule).minify});
-                if (initialRule.ruleType === RuleType.LINE_LIMIT) { setLineLimitType((initialRule as LineLimitRule).limitType); setLineLimitParams({... (initialRule as LineLimitRule).params});}
+                if (initialRule.ruleType === RuleType.IMPORT) {
+                    setImportActionType((initialRule as ImportRule).actionType);
+                } else if (initialRule.ruleType === RuleType.COMPRESSION) {
+                    setCompressionOptions({removeEmptyLines: (initialRule as CompressionRule).removeEmptyLines, removeComments: (initialRule as CompressionRule).removeComments, minify: (initialRule as CompressionRule).minify});
+                } else if (initialRule.ruleType === RuleType.LINE_LIMIT) { 
+                    setLineLimitType((initialRule as LineLimitRule).limitType); 
+                    setLineLimitParams({... (initialRule as LineLimitRule).params});
+                }
             } else {
                 setName(''); setDescription(''); setSelectedMatchIds([]);
                 setImportActionType(''); setCompressionOptions({}); setLineLimitType(''); setLineLimitParams({});
@@ -54,6 +69,22 @@ const CreateRuleModal: React.FC<CreateRuleModalProps> = ({ isOpen, onClose, onSa
             setNameError(null);
         }
     }, [initialRule, isOpen]);
+
+    useEffect(() => {
+        // When importActionType changes, filter out incompatible selectedMatchIds
+        if (ruleTypeContext === RuleType.IMPORT && importActionType) {
+            const target = (importActionType === ImportRuleActionType.IMPORT_FOLDER || importActionType === ImportRuleActionType.CANCEL_IMPORT_FOLDER)
+                ? MatchTargetType.FOLDER
+                : MatchTargetType.FILE;
+            
+            setSelectedMatchIds(prevIds => 
+                prevIds.filter(id => {
+                    const match = allMatches.find(m => m.id === id);
+                    return match && match.targetType === target;
+                })
+            );
+        }
+    }, [importActionType, ruleTypeContext, allMatches]);
 
     const validateName = (currentName: string): boolean => {
         if (!currentName.trim()) { setNameError("规则名称不能为空"); return false; }
@@ -112,7 +143,12 @@ const CreateRuleModal: React.FC<CreateRuleModalProps> = ({ isOpen, onClose, onSa
                 <TextArea label="描述" value={description} onChange={e => setDescription(e.target.value)} rows={2} />
 
                 {ruleTypeContext === RuleType.IMPORT && (
-                    <Select label="导入操作类型" value={importActionType} onChange={e => setImportActionType(e.target.value as ImportRuleActionType)} options={[{value: '', label: '选择操作类型'}, ...importActionOptions]} />
+                    <>
+                        <Select label="导入操作类型" value={importActionType} onChange={e => setImportActionType(e.target.value as ImportRuleActionType)} options={[{value: '', label: '选择操作类型'}, ...importActionOptions]} />
+                        <p className="text-xs text-gray-500 mt-1">
+                          提示：“取消导入”操作表示此规则尝试排除匹配项。但由于规则按优先级应用，更高优先级的“导入”规则仍可能包含这些项。
+                        </p>
+                    </>
                 )}
                 {ruleTypeContext === RuleType.COMPRESSION && (
                     <div>
@@ -142,8 +178,15 @@ const CreateRuleModal: React.FC<CreateRuleModalProps> = ({ isOpen, onClose, onSa
 
                 <div>
                     <h4 className="text-sm font-medium text-gray-700 mb-1.5">选择匹配项 (至少一个)</h4>
+                     {ruleTypeContext === RuleType.IMPORT && !importActionType && (
+                        <p className="text-xs text-orange-600 bg-orange-50 p-2 rounded-md border border-orange-200 mb-2">请先选择上方的“导入操作类型”，以筛选出兼容的匹配项 (文件或文件夹类型)。</p>
+                    )}
                     <div className="max-h-48 overflow-y-auto border rounded-md p-2 space-y-1 bg-slate-50">
-                        {relevantMatches.length === 0 && <p className="text-xs text-gray-500">没有可用的匹配项。请先在匹配库中创建。</p>}
+                        {relevantMatches.length === 0 && <p className="text-xs text-gray-500">
+                            {(ruleTypeContext === RuleType.IMPORT && !importActionType) 
+                                ? "请先选择导入操作类型。" 
+                                : "没有可用的匹配项。请先在匹配库中创建与此规则类型/操作类型兼容的匹配项。"}
+                        </p>}
                         {relevantMatches.map(match => (
                             <Checkbox key={match.id} label={`${match.name} (${match.targetType} - ${match.targetType === '文件夹' ? match.folderMatchType : match.fileMatchType})`} checked={selectedMatchIds.includes(match.id)} onChange={() => toggleMatchSelection(match.id)} />
                         ))}
@@ -299,13 +342,23 @@ const RulesetsView: React.FC = () => {
   return (
     <div className="flex flex-col h-full p-1">
       <div className="mb-3 p-3 bg-slate-100 rounded-md shadow-sm border border-slate-200">
-        <Select
-          label="选择规则集类型:"
-          value={selectedRulesetType}
-          onChange={e => { setSelectedRulesetType(e.target.value as RuleType); setSelectedRulesetId(null); }}
-          options={rulesetTypeOptions}
-          containerClassName="max-w-xs"
-        />
+        <div className="flex items-center">
+          <Select
+            label="选择规则集类型:"
+            value={selectedRulesetType}
+            onChange={e => { setSelectedRulesetType(e.target.value as RuleType); setSelectedRulesetId(null); }}
+            options={rulesetTypeOptions}
+            containerClassName="max-w-xs"
+          />
+          {selectedRulesetType === RuleType.IMPORT && (
+             <Tooltip 
+                text="导入规则中的“取消导入”表示尝试排除匹配项，但更高优先级的“导入”规则仍可能将其包含。"
+                position="right"
+             >
+                 <span className="ml-2 cursor-default">{React.cloneElement(QUESTION_MARK_ICON, {className:"w-4 h-4"})}</span>
+             </Tooltip>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-grow space-x-1 overflow-hidden">

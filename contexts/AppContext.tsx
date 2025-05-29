@@ -22,13 +22,6 @@ const DEFAULT_EXCLUDE_FILE_EXTENSIONS_PATTERNS = [
     '.DS_Store', '.Spotlight-V100', '.Trashes', 'Thumbs.db', 
 ];
 
-// Helper for wildcard to regex
-const wildcardToRegex = (pattern: string): RegExp => {
-    const escapedPattern = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&'); // Escape regex special chars
-    const regexPattern = escapedPattern.replace(/\*/g, '.*').replace(/\?/g, '.');
-    return new RegExp(`^${regexPattern}$`, 'i'); // Case-insensitive
-};
-
 // localStorage keys
 const LS_KEYS = {
   MATCHES: 'directoryx_matches',
@@ -61,6 +54,29 @@ const saveToLocalStorage = <T,>(key: string, value: T): void => {
   }
 };
 
+// Helper for wildcard (name) to regex
+const wildcardToRegex = (pattern: string): RegExp => {
+    const escapedPattern = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&'); 
+    const regexPattern = escapedPattern.replace(/\*/g, '.*').replace(/\?/g, '.');
+    return new RegExp(`^${regexPattern}$`, 'i'); 
+};
+
+// Helper for path wildcard to regex
+const pathWildcardToRegex = (pattern: string): RegExp => {
+    // Normalize path separators to /
+    let p = pattern.replace(/\\/g, '/');
+    // Escape most regex special characters
+    p = p.replace(/[+()|[\]\\]/g, '\\$&'); // Keep . ^ $ for user's own regex-like use in wildcards
+    // Handle **: match any sequence of characters including /
+    p = p.replace(/\*\*/g, '.*');
+    // Handle *: match any sequence of characters except /
+    p = p.replace(/\*/g, '[^/]*');
+    // Handle ?: match a single character except /
+    p = p.replace(/\?/g, '[^/]');
+    // Anchor the pattern to match the full path
+    return new RegExp(`^${p}$`, 'i');
+};
+
 
 interface AppContextType {
   // File System
@@ -78,7 +94,7 @@ interface AppContextType {
   updateMatch: (match: Match) => void;
   deleteMatch: (matchId: UID) => void;
   getMatchById: (id: UID) => Match | undefined;
-  checkNodeAgainstMatchConditions: (node: FileSystemNode, match: Match) => boolean; // Expose for testing in UI
+  checkNodeAgainstMatchConditions: (node: FileSystemNode, match: Match) => boolean;
 
   // Rules
   rules: Rule[];
@@ -283,7 +299,8 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     if (node.type !== (match.targetType === MatchTargetType.FOLDER ? 'directory' : 'file')) return false;
 
     return match.conditions.some(condition => {
-        const nodeName = node.name; // Use original case for regex, lowercase for others
+        const nodeName = node.name; 
+        const nodePath = node.path;
         const conditionValue = condition.value;
 
         if (match.targetType === MatchTargetType.FOLDER) {
@@ -292,7 +309,11 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
                 case FolderMatchType.NAME: return nodeName.toLowerCase().includes(conditionValue.toLowerCase());
                 case FolderMatchType.WILDCARD: return wildcardToRegex(conditionValue).test(nodeName);
                 case FolderMatchType.REGEX: 
-                    try { return new RegExp(conditionValue).test(nodeName); } catch (e) { console.error("Invalid Regex:", conditionValue, e); return false; }
+                    try { return new RegExp(conditionValue).test(nodeName); } catch (e) { console.error("Invalid Regex for folder name:", conditionValue, e); return false; }
+                case FolderMatchType.PATH_WILDCARD:
+                    try { return pathWildcardToRegex(conditionValue).test(nodePath); } catch (e) { console.error("Invalid Path Wildcard for folder path:", conditionValue, e); return false; }
+                case FolderMatchType.PATH_REGEX:
+                    try { return new RegExp(conditionValue).test(nodePath); } catch (e) { console.error("Invalid Regex for folder path:", conditionValue, e); return false; }
                 default: return false;
             }
         } else { // FILE
@@ -302,7 +323,11 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
                 case FileMatchType.SUFFIX: return nodeName.toLowerCase().endsWith(conditionValue.toLowerCase().startsWith('.') ? conditionValue.toLowerCase() : `.${conditionValue.toLowerCase()}`);
                 case FileMatchType.WILDCARD: return wildcardToRegex(conditionValue).test(nodeName);
                 case FileMatchType.REGEX:
-                    try { return new RegExp(conditionValue).test(nodeName); } catch (e) { console.error("Invalid Regex:", conditionValue, e); return false; }
+                    try { return new RegExp(conditionValue).test(nodeName); } catch (e) { console.error("Invalid Regex for file name:", conditionValue, e); return false; }
+                case FileMatchType.PATH_WILDCARD:
+                    try { return pathWildcardToRegex(conditionValue).test(nodePath); } catch (e) { console.error("Invalid Path Wildcard for file path:", conditionValue, e); return false; }
+                case FileMatchType.PATH_REGEX:
+                    try { return new RegExp(conditionValue).test(nodePath); } catch (e) { console.error("Invalid Regex for file path:", conditionValue, e); return false; }
                 default: return false;
             }
         }
@@ -385,7 +410,10 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     const processHandle = async (handle: FileSystemHandle, parentId: UID | null, currentPath: string): Promise<FileSystemNode | null> => {
         const itemType = handle.kind as ('file' | 'directory');
         const nodeId = `node-${idCounter++}-${handle.name.replace(/[^a-zA-Z0-9_.-]/g, '')}`; 
-        const path = `${currentPath}${parentId ? '/' : ''}${handle.name}`;
+        // Ensure path segments are joined by '/', remove leading/trailing slashes from segment, then join.
+        const newSegment = handle.name.replace(/^\/+|\/+$/g, '');
+        const path = currentPath ? `${currentPath}/${newSegment}` : newSegment;
+
 
         if (itemType === 'file') {
             const fileHandle = handle as FileSystemFileHandle;
@@ -420,7 +448,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     try {
       if (handles && handles.length > 0) {
         for (const handle of handles) { 
-          const rootNode = await processHandle(handle, null, "");
+          const rootNode = await processHandle(handle, null, ""); // Root nodes have empty currentPath initially
           if (rootNode) rawNodes.push(rootNode);
         }
       } else { 
@@ -914,7 +942,13 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     if (effectiveCompressionOptions.removeComments) { 
         currentContent = currentContent.split('\n').filter(line => {
             const trimmed = line.trim();
-            return !trimmed.startsWith('//') && !trimmed.startsWith('#') && !trimmed.startsWith(';');
+            // Extended to handle more comment types
+            return !trimmed.startsWith('//') && 
+                   !trimmed.startsWith('#') && 
+                   !trimmed.startsWith(';') &&
+                   !trimmed.startsWith('--') && // For Lua, AppleScript, SQL
+                   !trimmed.startsWith("'") &&  // For VBScript
+                   !trimmed.startsWith('%');   // For MATLAB
         }).join('\n');
     }
     if (effectiveCompressionOptions.minify) { /* Minify logic placeholder */ }
