@@ -1,6 +1,6 @@
 
 import React, { createContext, useState, useContext, useCallback, ReactNode, useMemo, useEffect } from 'react';
-import { 
+import {
   UID, FileSystemNode, FileNode, DirectoryNode, AppStateSnapshot,
   Match, Rule, Ruleset, Operation, Macro, RuleInstance, OperationInstance,
   MatchTargetType, FolderMatchType, FileMatchType, MatchConditionItem, FolderMatch, FileMatch,
@@ -9,8 +9,8 @@ import {
   OperationTargetType, FolderOperation, FolderOperationType, FileOperation, FileOperationType,
   ExportType, GlobalExportSettings
 } from '../types';
-import { 
-    DEFAULT_NO_LINES_EXTENSIONS, 
+import {
+    DEFAULT_NO_LINES_EXTENSIONS,
     DEFAULT_MATCHES, DEFAULT_RULES, DEFAULT_RULESETS, DEFAULT_OPERATIONS, DEFAULT_MACROS,
     RULESET_ID_DEFAULT_IMPORT, RULESET_ID_DEFAULT_COMPRESSION, RULESET_ID_DEFAULT_LINELIMIT
 } from '../constants';
@@ -51,9 +51,9 @@ const saveToLocalStorage = <T,>(key: string, value: T): void => {
 
 // Helper for wildcard (name) to regex
 const wildcardToRegex = (pattern: string): RegExp => {
-    const escapedPattern = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&'); 
+    const escapedPattern = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
     const regexPattern = escapedPattern.replace(/\*/g, '.*').replace(/\?/g, '.');
-    return new RegExp(`^${regexPattern}$`, 'i'); 
+    return new RegExp(`^${regexPattern}$`, 'i');
 };
 
 // Helper for path wildcard to regex
@@ -82,7 +82,7 @@ interface AppContextType {
   selectAllDescendantFiles: (dirId: UID, select: boolean) => void;
   invertSelectionDescendantFiles: (dirId: UID) => void;
   updateNodeProperties: (nodeId: UID, properties: Partial<Pick<FileSystemNode, 'descriptionOverride' | 'lineLimitOverride' | 'compressionOverride'>>) => void;
-  
+
   // Matches
   matches: Match[];
   addMatch: (match: Omit<Match, 'id' | 'isDefault'>) => Match;
@@ -228,7 +228,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const [selectedImportRulesetId, setSelectedImportRulesetId] = useState<UID | null>(() => loadFromLocalStorage(LS_KEYS.SELECTED_IMPORT_RULESET_ID, RULESET_ID_DEFAULT_IMPORT));
   const [selectedCompressionRulesetId, setSelectedCompressionRulesetId] = useState<UID | null>(() => loadFromLocalStorage(LS_KEYS.SELECTED_COMPRESSION_RULESET_ID, RULESET_ID_DEFAULT_COMPRESSION));
   const [selectedLineLimitRulesetId, setSelectedLineLimitRulesetId] = useState<UID | null>(() => loadFromLocalStorage(LS_KEYS.SELECTED_LINE_LIMIT_RULESET_ID, RULESET_ID_DEFAULT_LINELIMIT));
-  
+
   const [fileTreeUndoStack, setFileTreeUndoStack] = useState<AppStateSnapshot[]>([]);
   const [fileTreeRedoStack, setFileTreeRedoStack] = useState<AppStateSnapshot[]>([]);
   const [macroUndoStack, setMacroUndoStack] = useState<AppStateSnapshot[]>([]);
@@ -255,7 +255,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
         setSelectedImportRulesetId(RULESET_ID_DEFAULT_IMPORT);
         setSelectedCompressionRulesetId(RULESET_ID_DEFAULT_COMPRESSION);
         setSelectedLineLimitRulesetId(RULESET_ID_DEFAULT_LINELIMIT);
-        
+
         Object.values(LS_KEYS).forEach(key => localStorage.removeItem(key));
         alert("所有配置已重置为默认值。");
     }
@@ -263,8 +263,8 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
 
   // --- FileTree Snapshot and Undo/Redo ---
   const saveFileTreeSnapshot = useCallback(() => {
-    const snapshot: AppStateSnapshot = { fileTree: JSON.parse(JSON.stringify(fileTree)) }; 
-    setFileTreeUndoStack(prev => [...prev, snapshot].slice(-20)); 
+    const snapshot: AppStateSnapshot = { fileTree: JSON.parse(JSON.stringify(fileTree)) };
+    setFileTreeUndoStack(prev => [...prev, snapshot].slice(-20));
     setFileTreeRedoStack([]);
   }, [fileTree]);
 
@@ -287,13 +287,13 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
       setFileTree(nextState.fileTree);
     }
   };
-  
+
   // --- Match Helpers ---
   const checkNodeAgainstMatchConditions = (node: FileSystemNode, match: Match): boolean => {
     if (node.type !== (match.targetType === MatchTargetType.FOLDER ? 'directory' : 'file')) return false;
 
     return match.conditions.some(condition => {
-        const nodeName = node.name; 
+        const nodeName = node.name;
         const nodePath = node.path;
         const conditionValue = condition.value;
 
@@ -302,7 +302,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
             switch (fm.folderMatchType) {
                 case FolderMatchType.NAME: return nodeName.toLowerCase().includes(conditionValue.toLowerCase());
                 case FolderMatchType.WILDCARD: return wildcardToRegex(conditionValue).test(nodeName);
-                case FolderMatchType.REGEX: 
+                case FolderMatchType.REGEX:
                     try { return new RegExp(conditionValue).test(nodeName); } catch (e) { console.error("Invalid Regex for folder name:", conditionValue, e); return false; }
                 case FolderMatchType.PATH_WILDCARD:
                     try { return pathWildcardToRegex(conditionValue).test(nodePath); } catch (e) { console.error("Invalid Path Wildcard for folder path:", conditionValue, e); return false; }
@@ -338,76 +338,85 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   // --- Import Directory & Rule Application ---
   const applyImportRules = (nodes: FileSystemNode[], rulesetIdToApply: UID | null): FileSystemNode[] => {
     const ruleset = rulesetIdToApply ? rulesets.find(rs => rs.id === rulesetIdToApply && rs.type === RuleType.IMPORT) : null;
-    if (!ruleset || ruleset.rules.length === 0) return nodes; // No rules to apply, return original tree
+    if (!ruleset || ruleset.rules.length === 0) return nodes;
 
-    const sortedRuleInstances = [...ruleset.rules].sort((a, b) => b.priority - a.priority); // Higher number = higher priority (processed first)
-    let decisionMap = new Map<UID, { included: boolean, reason: string }>();
+    const sortedRuleInstances = [...ruleset.rules]
+        .filter(ri => ri.enabled)
+        .sort((a, b) => a.priority - b.priority); // Lower number = higher priority, processed first
 
-    function processNode(node: FileSystemNode, parentDecision: {included: boolean, reason: string} | null) {
-        let nodeIncluded = parentDecision?.included ?? false; 
-        let ruleReason = parentDecision?.reason ?? "默认未包含";
+    const decisionMap = new Map<UID, { included: boolean; reason: string }>();
 
-        for (const ruleInstance of sortedRuleInstances) { 
-            if (!ruleInstance.enabled) continue;
+    function determineNodeDecision(node: FileSystemNode, parentDecision: { included: boolean; reason: string }) {
+        let isIncluded = parentDecision.included;
+        let reason = parentDecision.reason;
+        let ruleMatchedThisNode = false;
+
+        for (const ruleInstance of sortedRuleInstances) {
             const rule = rules.find(r => r.id === ruleInstance.ruleId && r.ruleType === RuleType.IMPORT) as ImportRule | undefined;
             if (!rule) continue;
 
             if (checkNodeMatchesAny(node, rule.matchIds)) {
+                ruleMatchedThisNode = true;
+                reason = `规则: ${rule.name}`;
                 switch (rule.actionType) {
                     case ImportRuleActionType.IMPORT_FILE:
-                        if (node.type === 'file') { nodeIncluded = true; ruleReason = `规则: ${rule.name}`; }
+                        if (node.type === 'file') isIncluded = true;
                         break;
                     case ImportRuleActionType.IMPORT_FOLDER:
-                        if (node.type === 'directory') { nodeIncluded = true; ruleReason = `规则: ${rule.name}`; }
+                        if (node.type === 'directory') isIncluded = true;
                         break;
                     case ImportRuleActionType.CANCEL_IMPORT_FILE:
-                        if (node.type === 'file') { nodeIncluded = false; ruleReason = `规则: ${rule.name}`; }
+                        if (node.type === 'file') isIncluded = false;
                         break;
                     case ImportRuleActionType.CANCEL_IMPORT_FOLDER:
-                        if (node.type === 'directory') { nodeIncluded = false; ruleReason = `规则: ${rule.name}`; }
+                        if (node.type === 'directory') isIncluded = false;
                         break;
                 }
+                // Decision made by the highest-priority matching rule.
+                break;
             }
         }
-        decisionMap.set(node.id, { included: nodeIncluded, reason: ruleReason });
+        
+        // If no specific rule matched this node, its inclusion status is purely inherited.
+        // If a rule did match, 'isIncluded' and 'reason' are now set by that rule.
+        decisionMap.set(node.id, { included: isIncluded, reason });
 
         if (node.type === 'directory' && node.children) {
-            node.children.forEach(child => processNode(child, { included: nodeIncluded, reason: `父文件夹 (${node.name}) ${nodeIncluded ? '已导入' : '已取消导入'}` }));
+            node.children.forEach(child => {
+                // Children inherit the decision just made for THIS parent
+                determineNodeDecision(child, { included: isIncluded, reason: `父文件夹 (${node.name}) ${isIncluded ? '已导入' : '已排除基于规则: ' + reason}` });
+            });
         }
     }
-    
-    // Initialize with default rule: import all. This ensures nodes not matching any specific rule still have a base decision.
-    // The actual processNode will then apply specific rules.
-    nodes.forEach(node => processNode(node, {included: true, reason: "默认导入"})); 
 
+    // Initialize root nodes: they are by default considered for import, rules will then refine this.
+    nodes.forEach(node => determineNodeDecision(node, { included: true, reason: "默认包含 (待规则过滤)" }));
 
     const filterTree = (nodesToFilter: FileSystemNode[]): FileSystemNode[] => {
       return nodesToFilter
-        .map(node => { // Map first to ensure children are processed before parent is potentially filtered out
+        .map(node => {
           if (node.type === 'directory' && node.children) {
             const filteredChildren = filterTree(node.children);
-            // Only keep directory if it's included OR it has included children
             if (decisionMap.get(node.id)?.included || filteredChildren.length > 0) {
               return { ...node, children: filteredChildren };
             }
-            return null; // Directory itself is excluded and has no included children
+            return null;
           }
-          // For files, just check decisionMap
           return decisionMap.get(node.id)?.included ? node : null;
         })
-        .filter(node => node !== null) as FileSystemNode[]; // Remove nulls
+        .filter(node => node !== null) as FileSystemNode[];
     };
-    
-    return filterTree(JSON.parse(JSON.stringify(nodes))); 
+
+    return filterTree(JSON.parse(JSON.stringify(nodes)));
   };
-  
+
   const loadContentForRemainingFiles = async (nodes: FileSystemNode[]): Promise<FileSystemNode[]> => {
     const updatedNodesPromises = nodes.map(async (node) => {
         let updatedNode = { ...node };
         if (updatedNode.type === 'file') {
             const fileNode = updatedNode as FileNode;
             // Load content only if _fileHandle exists and content hasn't been set (e.g. for binary placeholders)
-            if (fileNode._fileHandle && typeof fileNode.content === 'undefined') { 
+            if (fileNode._fileHandle && typeof fileNode.content === 'undefined') {
                 try {
                     const file = await (fileNode._fileHandle as FileSystemFileHandle).getFile();
                     const textContent = await file.text();
@@ -433,12 +442,12 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     saveFileTreeSnapshot();
     let rawNodes: FileSystemNode[] = [];
     let idCounter = Date.now();
-    
+
     const isNoLinesContent = (name: string): boolean => DEFAULT_NO_LINES_EXTENSIONS.some(ext => name.toLowerCase().endsWith(ext));
 
     const processHandle = async (handle: FileSystemHandle, parentId: UID | null, currentPath: string): Promise<FileSystemNode | null> => {
         const itemType = handle.kind as ('file' | 'directory');
-        const nodeId = `node-${idCounter++}-${handle.name.replace(/[^a-zA-Z0-9_.-]/g, '')}`; 
+        const nodeId = `node-${idCounter++}-${handle.name.replace(/[^a-zA-Z0-9_.-]/g, '')}`;
         const newSegment = handle.name.replace(/^\/+|\/+$/g, '');
         const path = currentPath ? `${currentPath}/${newSegment}` : newSegment;
 
@@ -453,7 +462,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
             if (noLines) {
                 nodeContent = "[二进制或非文本文件内容不加载]";
                 nodeTotalLines = 0;
-                nodeLineLimitOverride = { 
+                nodeLineLimitOverride = {
                     id: generateId(), name: '默认无内容', description: '二进制/非文本文件默认不导出内容',
                     ruleType: RuleType.LINE_LIMIT, matchIds: [],
                     limitType: LineLimitRuleTypeOption.NO_LINES, params: {}
@@ -474,17 +483,17 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
                     }
                 }
             }
-            
+
             return {
-                id: nodeId, name: handle.name, type: 'file', path, parentId, selected: false, 
-                content: nodeContent, 
+                id: nodeId, name: handle.name, type: 'file', path, parentId, selected: false,
+                content: nodeContent,
                 totalLines: nodeTotalLines,
                 lineLimitOverride: nodeLineLimitOverride,
-                _fileHandle: tempFileHandleForLaterLoading, 
+                _fileHandle: tempFileHandleForLaterLoading,
             } as FileNode;
-        } else { 
+        } else {
             const dirNode: DirectoryNode = { id: nodeId, name: handle.name, type: 'directory', path, parentId, children: [] };
-            const entries: FileSystemHandle[] = []; 
+            const entries: FileSystemHandle[] = [];
             for await (const entry of (handle as FileSystemDirectoryHandle).values()) entries.push(entry);
             entries.sort((a,b) => (a.kind === 'directory' && b.kind === 'file') ? -1 : (a.kind === 'file' && b.kind === 'directory') ? 1 : a.name.localeCompare(b.name, 'zh-CN-u-co-pinyin'));
             for (const entry of entries) {
@@ -494,14 +503,14 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
             return dirNode;
         }
     };
-      
+
     try {
       if (handles && handles.length > 0) {
-        for (const handle of handles) { 
+        for (const handle of handles) {
           const rootNode = await processHandle(handle, null, "");
           if (rootNode) rawNodes.push(rootNode);
         }
-      } else { 
+      } else {
         // Simplified Mock Structure: content is loaded synchronously by processHandle for mocks now
         const mockIndexTsHandle = { name: "index.ts", kind: 'file', getFile: async () => new File(["console.log('hello from mock index.ts');\n// another line"], "index.ts", {type: "text/typescript"}) } as unknown as FileSystemFileHandle;
         const mockReadmeMdHandle = { name: "README.md", kind: 'file', getFile: async () => new File(["# Mock Project Readme\nThis is a mock project."], "README.md", {type: "text/markdown"}) } as unknown as FileSystemFileHandle;
@@ -513,9 +522,9 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
       }
     } catch (err) {
       console.error("目录导入错误:", err);
-      rawNodes = []; 
+      rawNodes = [];
     }
-    
+
     const ruleAppliedTree = applyImportRules(rawNodes, selectedImportRulesetId);
     // Load content for files that survived the import rules and aren't binary placeholders
     const treeWithContentLoaded = await loadContentForRemainingFiles(ruleAppliedTree);
@@ -616,7 +625,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
       id: generateId(),
       name: `${originalRuleset.name} (复制)`,
       isDefault: false,
-      rules: originalRuleset.rules.map(ri => ({ ...ri, id: generateId() })), 
+      rules: originalRuleset.rules.map(ri => ({ ...ri, id: generateId() })),
     };
     setRulesets(prev => [...prev, newRuleset]);
     return newRuleset;
@@ -664,7 +673,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const reorderRuleInRuleset = (rulesetId: UID, ruleInstanceId: UID, direction: 'up' | 'down') => {
     setRulesets(prevRulesets => prevRulesets.map(rs => {
         if (rs.id === rulesetId) {
-            const rulesCopy = rs.rules.map(r => ({...r})); 
+            const rulesCopy = rs.rules.map(r => ({...r}));
             const ruleIndex = rulesCopy.findIndex(ri => ri.id === ruleInstanceId);
             if (ruleIndex === -1) return rs;
 
@@ -674,21 +683,21 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
             const currentPriority = rulesCopy[ruleIndex].priority;
             const targetPriority = rulesCopy[targetIndex].priority;
 
-            if (currentPriority === targetPriority) { 
+            if (currentPriority === targetPriority) {
                 if (direction === 'up') rulesCopy[ruleIndex].priority = targetPriority - 1;
                 else rulesCopy[ruleIndex].priority = targetPriority + 1;
             } else {
                 rulesCopy[ruleIndex].priority = targetPriority;
                 rulesCopy[targetIndex].priority = currentPriority;
             }
-            
+
             rulesCopy.sort((a, b) => a.priority - b.priority);
             return { ...rs, rules: rulesCopy };
         }
         return rs;
     }));
   };
-  
+
   // --- Operations CRUD ---
   const addOperation = (opData: Omit<Operation, 'id'|'isDefault'>): Operation => {
     const newOp = { ...opData, id: generateId(), isDefault: false } as Operation;
@@ -776,7 +785,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const reorderOperationInMacro = (macroId: UID, opInstanceId: UID, direction: 'up' | 'down') => {
     setMacros(prevMacros => prevMacros.map(m => {
         if (m.id === macroId) {
-            const opsCopy = m.operations.map(o => ({...o})); 
+            const opsCopy = m.operations.map(o => ({...o}));
             const opIndex = opsCopy.findIndex(oi => oi.id === opInstanceId);
             if (opIndex === -1) return m;
 
@@ -793,7 +802,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
                 opsCopy[opIndex].sequence = targetSeq;
                 opsCopy[targetIndex].sequence = currentSeq;
             }
-            
+
             opsCopy.sort((a, b) => a.sequence - b.sequence);
             return { ...m, operations: opsCopy };
         }
@@ -819,15 +828,15 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     setMacroUndoStack(prev => [...prev, snapshot].slice(-10));
     setMacroRedoStack([]);
   }, [fileTree]);
-  
+
   const executeMacro = (macroId: UID) => {
     const macro = macros.find(m => m.id === macroId);
     if (!macro) return;
 
-    saveMacroSnapshot(); 
+    saveMacroSnapshot();
 
-    let currentTree = JSON.parse(JSON.stringify(fileTree)); 
-    const newSelectedFileIds = getSelectedFileIds(currentTree); 
+    let currentTree = JSON.parse(JSON.stringify(fileTree));
+    const newSelectedFileIds = getSelectedFileIds(currentTree);
 
     macro.operations
         .filter(opInst => opInst.enabled)
@@ -857,13 +866,13 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
                                             else newSelectedFileIds.add(child.id);
                                         }
                                     }
-                                    if (child.type === 'directory' && child.children) processChildren(child.children); 
+                                    if (child.type === 'directory' && child.children) processChildren(child.children);
                                 });
                             };
                             if (node.children) processChildren(node.children);
                         }
                     }
-                    if (node.type === 'directory' && node.children) { 
+                    if (node.type === 'directory' && node.children) {
                        processNodeForMacro(node.children);
                     }
                 });
@@ -904,7 +913,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
       const currentSnapshot: AppStateSnapshot = { fileTree: JSON.parse(JSON.stringify(fileTree)), selectedFileIds: getSelectedFileIds(fileTree) };
       setMacroUndoStack(prev => [...prev, currentSnapshot].slice(-10));
       setMacroRedoStack(prev => prev.slice(1));
-      const applySelectionsFromSnapshot = (nodes: FileSystemNode[], selectedIds: Set<UID>): FileSystemNode[] => { 
+      const applySelectionsFromSnapshot = (nodes: FileSystemNode[], selectedIds: Set<UID>): FileSystemNode[] => {
           return nodes.map(node => {
               if (node.type === 'file') return { ...node, selected: selectedIds.has(node.id) };
               if (node.type === 'directory' && node.children) return { ...node, children: applySelectionsFromSnapshot(node.children, selectedIds) };
@@ -931,29 +940,29 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
         if (ruleset) {
             ruleset.rules
                 .filter(ri => ri.enabled)
-                .sort((a,b) => a.priority - b.priority) 
+                .sort((a,b) => a.priority - b.priority)
                 .forEach(ri => {
                     const rule = rules.find(r => r.id === ri.ruleId && r.ruleType === RuleType.COMPRESSION) as CompressionRule | undefined;
                     if (rule && checkNodeMatchesAny(fileNode, rule.matchIds)) {
                         if (rule.removeEmptyLines) effectiveCompressionOptions.removeEmptyLines = true;
                         if (rule.removeComments) effectiveCompressionOptions.removeComments = true;
-                        if (rule.minify) effectiveCompressionOptions.minify = true; 
+                        if (rule.minify) effectiveCompressionOptions.minify = true;
                         appliedRulesDescriptions.push(rule.name);
                     }
                 });
         }
     }
-    
+
     if (effectiveCompressionOptions.removeEmptyLines) currentContent = currentContent.split('\n').filter(line => line.trim() !== '').join('\n');
-    if (effectiveCompressionOptions.removeComments) { 
+    if (effectiveCompressionOptions.removeComments) {
         currentContent = currentContent.split('\n').filter(line => {
             const trimmed = line.trim();
-            return !trimmed.startsWith('//') && 
-                   !trimmed.startsWith('#') && 
+            return !trimmed.startsWith('//') &&
+                   !trimmed.startsWith('#') &&
                    !trimmed.startsWith(';') &&
-                   !trimmed.startsWith('--') && 
-                   !trimmed.startsWith("'") &&  
-                   !trimmed.startsWith('%');   
+                   !trimmed.startsWith('--') &&
+                   !trimmed.startsWith("'") &&
+                   !trimmed.startsWith('%');
         }).join('\n');
     }
     if (effectiveCompressionOptions.minify) { /* Minify logic placeholder */ }
@@ -967,25 +976,25 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
 
     if (fileNode.lineLimitOverride) {
         lineLimitRuleToApply = fileNode.lineLimitOverride;
-    } else { 
+    } else {
         const ruleset = rulesetIdToApply ? rulesets.find(rs => rs.id === rulesetIdToApply && rs.type === RuleType.LINE_LIMIT) : null;
         if (ruleset) {
             const sortedRuleInstances = ruleset.rules
                 .filter(ri => ri.enabled)
-                .sort((a,b) => a.priority - b.priority); 
+                .sort((a,b) => a.priority - b.priority);
 
             for (const ri of sortedRuleInstances) {
                 const rule = rules.find(r => r.id === ri.ruleId && r.ruleType === RuleType.LINE_LIMIT) as LineLimitRule | undefined;
                 if (rule && checkNodeMatchesAny(fileNode, rule.matchIds)) {
                     lineLimitRuleToApply = rule;
-                    break; 
+                    break;
                 }
             }
         }
     }
 
     if (!lineLimitRuleToApply) return { limitedContent: content, ruleAppliedInfo: "" };
-    
+
     const limit = lineLimitRuleToApply;
     ruleAppliedInfo = `行数限制规则: ${limit.name} (${limit.limitType})`;
     if(limit.params && Object.keys(limit.params).length > 0) ruleAppliedInfo += ` (${JSON.stringify(limit.params)})`;
@@ -1008,18 +1017,18 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
             case LineLimitRuleTypeOption.RANDOM_PERCENT:
                 const targetCount = Math.round(lines.length * (Math.max(0, Math.min(100, percent)) / 100));
                 if (targetCount < lines.length) {
-                    newLines = lines.slice(0, targetCount); 
+                    newLines = lines.slice(0, targetCount);
                     newLines.push(`\n... (内容已按 ${percent}% 比例截取，保留 ${targetCount} / ${lines.length} 行) ...\n`);
                 }
                 break;
-            case LineLimitRuleTypeOption.RANDOM_N: 
+            case LineLimitRuleTypeOption.RANDOM_N:
                 if (n < lines.length && n > 0) {
                     newLines = lines.slice(0, n);
                     newLines.push(`\n... (内容已按 ${n} 行截取，保留 ${n} / ${lines.length} 行) ...\n`);
                 } else if (n >= lines.length) {
                     // no change
-                } else { 
-                     newLines = []; 
+                } else {
+                     newLines = [];
                 }
                 break;
         }
@@ -1079,7 +1088,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
         flatSelectedFiles.forEach(fileNode => {
             output += `// Path: ${fileNode.path}\n`;
             if (fileNode.descriptionOverride) output += `// 描述: ${fileNode.descriptionOverride}\n`;
-            
+
             let fileContent = fileNode.content || "[文件内容为空或无法加载]";
             fileContent = applyCompressionRulesToFileContent(fileContent, fileNode, selectedCompressionRulesetId);
             const { limitedContent, ruleAppliedInfo } = applyLineLimitRulesToFileContent(fileContent, fileNode, selectedLineLimitRulesetId);
@@ -1104,7 +1113,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
 
 
   const contextValue: AppContextType = {
-    fileTree, setFileTree, importDirectory, updateNodeSelectionInTree, 
+    fileTree, setFileTree, importDirectory, updateNodeSelectionInTree,
     selectAllDescendantFiles, invertSelectionDescendantFiles,
     updateNodeProperties,
     matches, addMatch, updateMatch, deleteMatch, getMatchById, checkNodeAgainstMatchConditions,
@@ -1117,7 +1126,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     operations, addOperation, updateOperation, deleteOperation, getOperationById,
     macros, addMacro, updateMacro, deleteMacro, copyMacro, getMacroById,
     addOperationToMacro, updateOperationInMacro, removeOperationFromMacro, replaceOperationInMacro, reorderOperationInMacro,
-    exportContent, 
+    exportContent,
     globalSettings: _globalSettings,
     fileTreeUndoStack, fileTreeRedoStack, saveFileTreeSnapshot, undoFileTreeAction, redoFileTreeAction,
     canUndoFileTree: fileTreeUndoStack.length > 0,
