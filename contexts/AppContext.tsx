@@ -36,6 +36,8 @@ interface AppContextType {
   setFileTree: React.Dispatch<React.SetStateAction<FileSystemNode[]>>;
   importDirectory: (handles?: FileSystemDirectoryHandle[]) => Promise<void>;
   updateNodeSelectionInTree: (nodeId: UID, selected: boolean) => void;
+  selectAllDescendantFiles: (dirId: UID, select: boolean) => void;
+  invertSelectionDescendantFiles: (dirId: UID) => void;
   updateNodeProperties: (nodeId: UID, properties: Partial<Pick<FileSystemNode, 'descriptionOverride' | 'lineLimitOverride' | 'compressionOverride'>>) => void;
   
   // Matches
@@ -120,6 +122,49 @@ interface AppContextType {
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
+
+// Helper function for updating descendant file selections
+const updateDescendantFileSelectionsInTree = (
+  nodes: FileSystemNode[],
+  targetDirectoryId: UID,
+  selectionValueOrFn: boolean | ((currentSelected: boolean) => boolean)
+): FileSystemNode[] => {
+  return nodes.map(node => {
+    const clonedNode = { ...node }; // Shallow clone node
+
+    if (clonedNode.type === 'directory') {
+      let childrenToProcess = (clonedNode as DirectoryNode).children;
+
+      if (clonedNode.id === targetDirectoryId) {
+        // This is the target directory. Apply selection logic to all its descendants.
+        const applySelectionToDescendants = (descendantNodes: FileSystemNode[]): FileSystemNode[] => {
+          return descendantNodes.map(childNode => {
+            const clonedChildNode = { ...childNode }; // Shallow clone child
+            if (clonedChildNode.type === 'file') {
+              const currentSelected = (clonedChildNode as FileNode).selected || false;
+              const newSelected = typeof selectionValueOrFn === 'function'
+                ? selectionValueOrFn(currentSelected)
+                : selectionValueOrFn;
+              (clonedChildNode as FileNode).selected = newSelected;
+            } else if (clonedChildNode.type === 'directory' && (clonedChildNode as DirectoryNode).children) {
+              // Recursively apply to children of this sub-directory
+              (clonedChildNode as DirectoryNode).children = applySelectionToDescendants((clonedChildNode as DirectoryNode).children);
+            }
+            return clonedChildNode;
+          });
+        };
+        if (childrenToProcess && childrenToProcess.length > 0) {
+          (clonedNode as DirectoryNode).children = applySelectionToDescendants(childrenToProcess);
+        }
+      } else if (childrenToProcess && childrenToProcess.length > 0) {
+        // Not the target directory, but it has children. Recurse.
+        (clonedNode as DirectoryNode).children = updateDescendantFileSelectionsInTree(childrenToProcess, targetDirectoryId, selectionValueOrFn);
+      }
+    }
+    return clonedNode;
+  });
+};
+
 
 export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const [fileTree, setFileTree] = useState<FileSystemNode[]>([]);
@@ -214,32 +259,20 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     const ruleset = rulesetId ? rulesets.find(rs => rs.id === rulesetId && rs.type === RuleType.IMPORT) : null;
     if (!ruleset || ruleset.rules.length === 0) return nodes;
 
-    // Sort rule instances by priority (highest number = lowest priority = processed first)
-    // This allows higher actual priority (lower number) rules processed later to override.
     const sortedRuleInstances = [...ruleset.rules].sort((a, b) => b.priority - a.priority);
 
     let decisionMap = new Map<UID, { included: boolean, reason: string }>();
 
-    // Initialize all nodes: folders are provisionally included if their parent is (or if they are root and no cancel rule applies first)
-    // files are provisionally excluded unless an import file rule applies.
-    // Default behavior: import nothing, unless a rule says so.
-    // Or, more practically: start with everything "potentially" importable, then prune.
-    // The spec implies: Import All (low priority), then Cancel specific (high priority).
-    // So, "Import All" sets base to true. "Cancel" sets to false.
-    // The loop processes from lowest priority (e.g., 100) to highest (e.g., 10).
-    // The decision made by the highest priority rule that matches will be the final one.
-
     function processNode(node: FileSystemNode, parentDecision: {included: boolean, reason: string} | null) {
-        let nodeIncluded = parentDecision?.included ?? false; // Tentative: if parent included, child might be. Default to not included.
+        let nodeIncluded = parentDecision?.included ?? false; 
         let ruleReason = parentDecision?.reason ?? "默认未包含";
 
-        for (const ruleInstance of sortedRuleInstances) { // Iterates from low priority (e.g. 100) to high (e.g. 10)
+        for (const ruleInstance of sortedRuleInstances) { 
             if (!ruleInstance.enabled) continue;
             const rule = rules.find(r => r.id === ruleInstance.ruleId && r.ruleType === RuleType.IMPORT) as ImportRule | undefined;
             if (!rule) continue;
 
             if (checkNodeMatchesAny(node, rule.matchIds)) {
-                // This rule matches. Its decision will take precedence over lower-priority rules processed earlier.
                 switch (rule.actionType) {
                     case ImportRuleActionType.IMPORT_FILE:
                         if (node.type === 'file') { nodeIncluded = true; ruleReason = `规则: ${rule.name}`; }
@@ -276,27 +309,18 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
         });
     };
     
-    return filterTree(JSON.parse(JSON.stringify(nodes))); // Work on a deep copy
+    return filterTree(JSON.parse(JSON.stringify(nodes))); 
   };
 
   const importDirectory = async (handles?: FileSystemDirectoryHandle[]) => {
     saveFileTreeSnapshot();
     let rawNodes: FileSystemNode[] = [];
     let idCounter = Date.now();
-
-    const isDefaultExcluded = (name: string, itemType: 'file' | 'directory'): boolean => {
-      const lowerName = name.toLowerCase();
-      if (itemType === 'directory') return globalSettings.defaultExcludeFolders.includes(lowerName);
-      return globalSettings.defaultExcludeFiles.some(pattern => lowerName.endsWith(pattern) || wildcardToRegex(pattern).test(lowerName));
-    };
     
     const isNoLinesContent = (name: string): boolean => DEFAULT_NO_LINES_EXTENSIONS.some(ext => name.toLowerCase().endsWith(ext));
 
     const processHandle = async (handle: FileSystemHandle, parentId: UID | null, currentPath: string): Promise<FileSystemNode | null> => {
         const itemType = handle.kind as ('file' | 'directory');
-        // Initial default exclusion, ruleset will refine this.
-        // if (isDefaultExcluded(handle.name, itemType)) return null; 
-
         const nodeId = `node-${idCounter++}-${handle.name.replace(/[^a-zA-Z0-9_.-]/g, '')}`; 
         const path = `${currentPath}${parentId ? '/' : ''}${handle.name}`;
 
@@ -317,7 +341,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
                     limitType: LineLimitRuleTypeOption.NO_LINES, params: {}
                 } : null,
             } as FileNode;
-        } else { // directory
+        } else { 
             const dirNode: DirectoryNode = { id: nodeId, name: handle.name, type: 'directory', path, parentId, children: [] };
             const entries: FileSystemHandle[] = []; 
             for await (const entry of (handle as FileSystemDirectoryHandle).values()) entries.push(entry);
@@ -410,6 +434,16 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
         });
     };
     setFileTree(prevTree => updateRecursive(prevTree));
+  };
+
+  const selectAllDescendantFiles = (dirId: UID, select: boolean) => {
+    saveFileTreeSnapshot();
+    setFileTree(prevTree => updateDescendantFileSelectionsInTree(prevTree, dirId, select));
+  };
+
+  const invertSelectionDescendantFiles = (dirId: UID) => {
+    saveFileTreeSnapshot();
+    setFileTree(prevTree => updateDescendantFileSelectionsInTree(prevTree, dirId, currentSelected => !currentSelected));
   };
 
   const updateNodeProperties = (nodeId: UID, properties: Partial<Pick<FileSystemNode, 'descriptionOverride' | 'lineLimitOverride' | 'compressionOverride'>>) => {
@@ -532,18 +566,17 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const reorderRuleInRuleset = (rulesetId: UID, ruleInstanceId: UID, direction: 'up' | 'down') => {
     setRulesets(prevRulesets => prevRulesets.map(rs => {
         if (rs.id === rulesetId) {
-            const rulesCopy = rs.rules.map(r => ({...r})); // Work with a copy of rule instances
+            const rulesCopy = rs.rules.map(r => ({...r})); 
             const ruleIndex = rulesCopy.findIndex(ri => ri.id === ruleInstanceId);
             if (ruleIndex === -1) return rs;
 
             const targetIndex = direction === 'up' ? ruleIndex - 1 : ruleIndex + 1;
             if (targetIndex < 0 || targetIndex >= rulesCopy.length) return rs;
 
-            // Swap priorities to achieve reordering, then re-sort to normalize if needed
             const currentPriority = rulesCopy[ruleIndex].priority;
             const targetPriority = rulesCopy[targetIndex].priority;
 
-            if (currentPriority === targetPriority) { // If same priority, adjust one slightly to force order
+            if (currentPriority === targetPriority) { 
                 if (direction === 'up') rulesCopy[ruleIndex].priority = targetPriority - 1;
                 else rulesCopy[ruleIndex].priority = targetPriority + 1;
             } else {
@@ -645,7 +678,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const reorderOperationInMacro = (macroId: UID, opInstanceId: UID, direction: 'up' | 'down') => {
     setMacros(prevMacros => prevMacros.map(m => {
         if (m.id === macroId) {
-            const opsCopy = m.operations.map(o => ({...o})); // Work with a copy
+            const opsCopy = m.operations.map(o => ({...o})); 
             const opIndex = opsCopy.findIndex(oi => oi.id === opInstanceId);
             if (opIndex === -1) return m;
 
@@ -884,7 +917,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
                 } else if (n >= lines.length) {
                     // no change
                 } else { // n is 0 or invalid
-                     newLines = []; // Or some other placeholder like "[内容已按0行规则截断]"
+                     newLines = []; 
                 }
                 break;
         }
@@ -969,7 +1002,9 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({ children }) => {
 
 
   const contextValue: AppContextType = {
-    fileTree, setFileTree, importDirectory, updateNodeSelectionInTree, updateNodeProperties,
+    fileTree, setFileTree, importDirectory, updateNodeSelectionInTree, 
+    selectAllDescendantFiles, invertSelectionDescendantFiles,
+    updateNodeProperties,
     matches, addMatch, updateMatch, deleteMatch, getMatchById, checkNodeAgainstMatchConditions,
     rules, addRule, updateRule, deleteRule, getRuleById,
     rulesets, addRuleset, updateRuleset, deleteRuleset, copyRuleset, getRulesetById,

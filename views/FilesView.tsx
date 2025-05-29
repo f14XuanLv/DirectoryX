@@ -234,13 +234,14 @@ const FilePropertiesModal: React.FC<FilePropertiesModalProps> = ({ node, isOpen,
 
 const FilesView: React.FC = () => {
   const { 
-    fileTree, setFileTree, importDirectory, 
+    fileTree, importDirectory, 
     updateNodeSelectionInTree, updateNodeProperties, exportContent,
+    selectAllDescendantFiles, invertSelectionDescendantFiles, // Use new context methods
     rulesets, macros, executeMacro,
     selectedImportRulesetId, setSelectedImportRulesetId,
     selectedCompressionRulesetId, setSelectedCompressionRulesetId,
     selectedLineLimitRulesetId, setSelectedLineLimitRulesetId,
-    saveFileTreeSnapshot, undoFileTreeAction, redoFileTreeAction, canUndoFileTree, canRedoFileTree,
+    undoFileTreeAction, canUndoFileTree, redoFileTreeAction, canRedoFileTree,
     undoMacroExecution, redoMacroExecution, canUndoMacro, canRedoMacro,
   } = useAppContext();
 
@@ -264,7 +265,7 @@ const FilesView: React.FC = () => {
   const [importErrorType, setImportErrorType] = useState<'none' | 'crossOrigin' | 'apiUnavailable' | 'generic'>('none');
 
 
-  useEffect(() => { // Auto-expand first level
+  useEffect(() => { 
     if (fileTree.length > 0) {
       const initialExpanded = new Set<UID>();
       fileTree.forEach(node => { if (node.type === 'directory') initialExpanded.add(node.id);});
@@ -272,14 +273,14 @@ const FilesView: React.FC = () => {
     } else { setExpandedNodes(new Set()); }
   }, [fileTree]);
 
-  useEffect(() => { // Keyboard shortcuts
+  useEffect(() => { 
     const handleKeyDown = (event: KeyboardEvent) => {
         const targetIsInput = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
-        if (targetIsInput && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) return; // Allow arrow navigation in inputs
+        if (targetIsInput && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) return; 
 
         if (event.ctrlKey || event.metaKey) {
             const keyLower = event.key.toLowerCase();
-            if (!targetIsInput) { // Global shortcuts only if not in input
+            if (!targetIsInput) { 
                 if (event.shiftKey && keyLower === 'f') {
                     event.preventDefault(); setShowFolderQuery(s => !s); setShowFileQuery(false);
                     if (!showFolderQuery) setTimeout(() => folderQueryInputRef.current?.focus(), 0);
@@ -288,10 +289,9 @@ const FilesView: React.FC = () => {
                     if (!showFileQuery) setTimeout(() => fileQueryInputRef.current?.focus(), 0);
                 }
             }
-            // Undo/Redo can be global or contextual. Here using separate ones.
             if (keyLower === 'z') {
                  event.preventDefault();
-                 if (canUndoMacro) undoMacroExecution(); // Prioritize macro undo if available
+                 if (canUndoMacro) undoMacroExecution(); 
                  else if (canUndoFileTree) undoFileTreeAction();
             } else if (keyLower === 'y') {
                  event.preventDefault();
@@ -327,7 +327,6 @@ const FilesView: React.FC = () => {
     setTimeout(() => document.getElementById(`treenode-${nodeId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
   }, [fileTree]);
 
-  // Folder Query Logic
   useEffect(() => { 
     if (folderSearchTerm.trim()) {
       const results: DirectoryNode[] = [];
@@ -348,7 +347,6 @@ const FilesView: React.FC = () => {
     setCurrentFolderQueryIndex(newIndex); expandToNode(folderQueryResults[newIndex].id);
   };
 
-  // File Query Logic
   useEffect(() => { 
     if (fileSearchTerm.trim()) {
       const results: FileNode[] = [];
@@ -372,12 +370,12 @@ const FilesView: React.FC = () => {
   const handleSaveProperties = (nodeId: UID, properties: Partial<Pick<FileSystemNode, 'descriptionOverride' | 'lineLimitOverride' | 'compressionOverride'>>) => updateNodeProperties(nodeId, properties);
   
   const handleImportDirectory = async () => {
-    setImportErrorType('none'); // Reset on new attempt
+    setImportErrorType('none'); 
     try {
       if (typeof window.showDirectoryPicker !== 'function') {
         console.warn("window.showDirectoryPicker API 不可用。将使用预设的示例项目。");
         setImportErrorType('apiUnavailable');
-        await importDirectory(); // Fallback to mock
+        await importDirectory(); 
         return;
       }
       const dirHandle = await window.showDirectoryPicker();
@@ -385,8 +383,6 @@ const FilesView: React.FC = () => {
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         console.log("用户取消了目录选择。");
-        // Do not fall back to mock if user explicitly cancels
-        // No error message needed for user cancellation
         return; 
       }
       
@@ -398,26 +394,18 @@ const FilesView: React.FC = () => {
         setImportErrorType('generic');
       }
       
-      await importDirectory(); // Fallback to mock import
+      await importDirectory(); 
     }
   };
   
   const handleSelectNode = (nodeId: UID, selected: boolean) => updateNodeSelectionInTree(nodeId, selected);
   
-  const applySelectionToChildren = (nodes: FileSystemNode[], targetDirId: UID, newSelectedState: boolean | ((currentSelected: boolean) => boolean)): FileSystemNode[] => {
-    return nodes.map(node => {
-      if (node.type === 'directory') {
-        let currentChildren = (node as DirectoryNode).children;
-        if (node.id === targetDirId) {
-          currentChildren = currentChildren.map(child => child.type === 'file' ? { ...child, selected: typeof newSelectedState === 'function' ? newSelectedState(child.selected || false) : newSelectedState } : child);
-        }
-        return { ...node, children: applySelectionToChildren(currentChildren, targetDirId, newSelectedState) }; // Always recurse
-      }
-      return node;
-    });
+  const handleSelectAllChildren = (dirId: UID, select: boolean) => {
+    selectAllDescendantFiles(dirId, select);
   };
-  const handleSelectAllChildren = (dirId: UID, select: boolean) => { saveFileTreeSnapshot(); setFileTree(prevTree => applySelectionToChildren(prevTree, dirId, select)); };
-  const handleInvertSelectionChildren = (dirId: UID) => { saveFileTreeSnapshot(); setFileTree(prevTree => applySelectionToChildren(prevTree, dirId, currentSelected => !currentSelected)); };
+  const handleInvertSelectionChildren = (dirId: UID) => {
+    invertSelectionDescendantFiles(dirId);
+  };
 
   const rulesetOptions = (type: RuleType) => [
     { value: '', label: '无 (或文件覆盖优先)' },
@@ -491,7 +479,7 @@ const FilesView: React.FC = () => {
             </div>
             <div className="relative group">
                 <Button variant="secondary">导出 ▼</Button>
-                <div className="absolute left-0 mt-1.5 w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-150 ease-in-out z-20 invisible group-hover:visible">
+                <div className="absolute left-0 top-full w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150 ease-in-out z-20 invisible group-hover:visible group-focus-within:visible">
                     <div className="py-1" role="menu" aria-orientation="vertical">
                     <a href="#" onClick={(e) => {e.preventDefault(); exportContent(ExportType.MERGE_SELECTED);}} className="block px-4 py-2 text-sm text-gray-700 hover:bg-slate-100" role="menuitem">合并导出选中的文件</a>
                     <a href="#" onClick={(e) => {e.preventDefault(); exportContent(ExportType.SEPARATE_SELECTED);}} className="block px-4 py-2 text-sm text-gray-700 hover:bg-slate-100" role="menuitem">分开导出选中的文件</a>

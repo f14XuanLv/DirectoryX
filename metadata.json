@@ -1,5 +1,6 @@
 {
   "name": "DirectoryX - 目录化工具",
   "description": "一个用于可视化目录结构、管理和导出文件内容的工具，特别适用于与大语言模型协作处理多文件项目。",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "prompt": ""
 }

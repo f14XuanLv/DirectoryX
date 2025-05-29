@@ -89,7 +89,7 @@ const App: React.FC = () => {
       </main>
 
       <footer className="bg-slate-800 text-gray-400 p-3 text-center text-xs shadow-inner">
-        © {new Date().getFullYear()} DirectoryX。保留所有权利。
+        © {new Date().getFullYear()} DirectoryX. Released under the MIT License.
       </footer>
     </div>
   );
