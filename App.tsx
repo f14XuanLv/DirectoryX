@@ -6,7 +6,7 @@ import MatchingLibraryView from './views/MatchingLibraryView';
 import RulesetsView from './views/RulesetsView';
 import MacroOperationsView from './views/MacroOperationsView';
 import { useAppContext } from './contexts/AppContext';
-import { FOLDER_ICON, LIBRARY_ICON, RULE_ICON, MACRO_ICON, TRASH_ICON } from './constants';
+import { FOLDER_ICON, LIBRARY_ICON, RULE_ICON, MACRO_ICON, TRASH_ICON, GITHUB_ICON } from './constants';
 import Button from './components/common/Button';
 import Tooltip from './components/common/Tooltip';
 
@@ -67,7 +67,19 @@ const App: React.FC = () => {
              {React.cloneElement(FOLDER_ICON, { className: "w-8 h-8 mr-3 text-sky-400"})}
             <h1 className="text-2xl font-semibold tracking-tight">DirectoryX - 目录化工具</h1>
           </div>
-          {/* Reset button removed from here */}
+          <div>
+            <Tooltip text="查看 GitHub 仓库" position="bottom">
+              <a
+                href="https://github.com/f14XuanLv/DirectoryX"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="查看 GitHub 仓库"
+                className="text-white hover:text-gray-300 transition-colors"
+              >
+                {React.cloneElement(GITHUB_ICON, { className: "w-7 h-7" })}
+              </a>
+            </Tooltip>
+          </div>
         </div>
       </header>
       
